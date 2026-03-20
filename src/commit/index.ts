@@ -13,8 +13,8 @@ export interface Commit {
   timestamp: number;
   /** Human-readable message. */
   message: string;
-  /** Hybrid logical clock timestamp for causal ordering. Optional for backward compat. */
-  hlc?: HlcTimestamp;
+  /** Hybrid logical clock timestamp for causal ordering. */
+  hlc: HlcTimestamp;
 }
 
 const TEXT_ENCODER = new TextEncoder();
@@ -34,16 +34,13 @@ export function encodeCommit(commit: Commit): Uint8Array {
 export function decodeCommit(data: Uint8Array): Commit {
   const json = TEXT_DECODER.decode(data);
   const obj = JSON.parse(json);
-  const commit: Commit = {
+  return {
     treeHash: obj.treeHash ?? null,
     parents: obj.parents ?? [],
     timestamp: obj.timestamp,
     message: obj.message ?? '',
+    hlc: obj.hlc,
   };
-  if (obj.hlc) {
-    commit.hlc = obj.hlc;
-  }
-  return commit;
 }
 
 // ── Ref storage ───────────────────────────────────────────────
@@ -103,7 +100,7 @@ export class CommitGraph {
   /** Walk the commit history from a starting hash, yielding commits in reverse chronological order. */
   async *log(startHash: Hash): AsyncIterable<{ hash: Hash; commit: Commit }> {
     const visited = new Set<Hash>();
-    // Priority queue by timestamp (simple array, fine for now)
+    // Priority queue by HLC (simple array, fine for now)
     const queue: Array<{ hash: Hash; commit: Commit }> = [];
 
     const enqueue = async (h: Hash) => {
@@ -112,13 +109,7 @@ export class CommitGraph {
       const commit = await this.getCommit(h);
       if (commit) {
         queue.push({ hash: h, commit });
-        queue.sort((a, b) => {
-          // Sort by HLC when both commits have it; fall back to timestamp
-          if (a.commit.hlc && b.commit.hlc) {
-            return HybridLogicalClock.compare(b.commit.hlc, a.commit.hlc);
-          }
-          return b.commit.timestamp - a.commit.timestamp;
-        });
+        queue.sort((a, b) => HybridLogicalClock.compare(b.commit.hlc, a.commit.hlc));
       }
     };
 
