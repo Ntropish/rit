@@ -60,6 +60,16 @@ export class FileStore implements Store {
     }
   }
 
+  async deleteBatch(hashes: Hash[]): Promise<void> {
+    for (const hash of hashes) {
+      try {
+        await unlink(shardPath(this.basePath, hash));
+      } catch (e: any) {
+        if (e.code !== 'ENOENT') throw e;
+      }
+    }
+  }
+
   async *hashes(): AsyncIterable<Hash> {
     let topEntries: string[];
     try {

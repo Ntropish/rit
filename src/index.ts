@@ -17,3 +17,4 @@ export { threeWayMerge } from './merge/index.js';
 export type { MergeResult, MergeConflict } from './merge/index.js';
 
 export { Repository } from './repo/index.js';
+export type { GcResult } from './repo/index.js';

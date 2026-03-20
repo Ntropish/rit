@@ -11,6 +11,7 @@ export class SqliteStore implements Store {
   private stmtPut;
   private stmtHas;
   private stmtHashes;
+  private stmtDelete;
 
   constructor(private db: Database) {
     db.run(`CREATE TABLE IF NOT EXISTS blocks (hash TEXT PRIMARY KEY, data BLOB NOT NULL)`);
@@ -19,6 +20,7 @@ export class SqliteStore implements Store {
     this.stmtPut = db.prepare('INSERT OR IGNORE INTO blocks (hash, data) VALUES (?, ?)');
     this.stmtHas = db.prepare<{ found: number }, [string]>('SELECT 1 as found FROM blocks WHERE hash = ?');
     this.stmtHashes = db.prepare<{ hash: string }, []>('SELECT hash FROM blocks');
+    this.stmtDelete = db.prepare('DELETE FROM blocks WHERE hash = ?');
   }
 
   async get(hash: Hash): Promise<Uint8Array | null> {
@@ -39,6 +41,15 @@ export class SqliteStore implements Store {
     const tx = this.db.transaction(() => {
       for (const { hash, data } of entries) {
         this.stmtPut.run(hash, data);
+      }
+    });
+    tx();
+  }
+
+  async deleteBatch(hashes: Hash[]): Promise<void> {
+    const tx = this.db.transaction(() => {
+      for (const hash of hashes) {
+        this.stmtDelete.run(hash);
       }
     });
     tx();

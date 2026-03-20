@@ -329,6 +329,12 @@ async function dispatch(repo: Repository, cmd: string, args: string[]): Promise<
       return;
     }
 
+    case 'GC': {
+      const result = await repo.gc();
+      console.log(`Removed ${result.blocksRemoved} block(s), reclaimed ${result.bytesReclaimed} bytes`);
+      return;
+    }
+
     default:
       console.log(`(error) unknown command: ${cmd}`);
   }

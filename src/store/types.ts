@@ -29,6 +29,12 @@ export interface Store {
   putBatch(entries: ReadonlyArray<{ hash: Hash; data: Uint8Array }>): Promise<void>;
 
   /**
+   * Delete multiple blocks by hash. Used by GC.
+   * Implementations should batch this in a transaction where possible.
+   */
+  deleteBatch(hashes: Hash[]): Promise<void>;
+
+  /**
    * Iterate all hashes. Used for GC, debugging, stats.
    * Not every backend needs to support this efficiently.
    */

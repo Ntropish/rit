@@ -28,6 +28,12 @@ export class MemoryStore implements Store {
     }
   }
 
+  async deleteBatch(hashes: Hash[]): Promise<void> {
+    for (const hash of hashes) {
+      this.blocks.delete(hash);
+    }
+  }
+
   async *hashes(): AsyncIterable<Hash> {
     for (const hash of this.blocks.keys()) {
       yield hash;

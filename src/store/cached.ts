@@ -50,6 +50,13 @@ export class CachedStore implements Store {
     this.evict();
   }
 
+  async deleteBatch(hashes: Hash[]): Promise<void> {
+    await this.inner.deleteBatch(hashes);
+    for (const hash of hashes) {
+      this.cache.delete(hash);
+    }
+  }
+
   hashes(): AsyncIterable<Hash> {
     return this.inner.hashes();
   }

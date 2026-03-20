@@ -3,7 +3,23 @@ import { ProllyTree } from '../prolly/index.js';
 import { RedisDataModel } from '../types/index.js';
 import { CommitGraph, MemoryRefStore, type Commit, type RefStore } from '../commit/index.js';
 import { threeWayMerge, type MergeResult } from '../merge/index.js';
+import { decodeInternalNode } from '../encoding/index.js';
 import type { DiffEntry } from '../prolly/index.js';
+
+function bytesToHex(bytes: Uint8Array): string {
+  let hex = '';
+  for (let i = 0; i < bytes.length; i++) {
+    hex += bytes[i].toString(16).padStart(2, '0');
+  }
+  return hex;
+}
+
+export interface GcResult {
+  /** Number of blocks removed. */
+  blocksRemoved: number;
+  /** Total bytes reclaimed. */
+  bytesReclaimed: number;
+}
 
 // ── Repository ────────────────────────────────────────────────
 
@@ -288,6 +304,78 @@ export class Repository {
     if (!commit) throw new Error(`Commit ${commitHash} not found`);
     const tree = new ProllyTree(this.store, commit.treeHash);
     return new RedisDataModel(tree);
+  }
+
+  // ── Garbage collection ─────────────────────────────────
+
+  /** Remove unreachable blocks from the store. */
+  async gc(): Promise<GcResult> {
+    const reachable = new Set<Hash>();
+
+    // 1. Collect all ref targets (branches + working trees)
+    const allRefs = await this.refs.listRefs();
+    const branchRefs = allRefs.filter(r => r.startsWith('refs/heads/'));
+    const workingRefs = allRefs.filter(r => r.startsWith('refs/working/'));
+
+    // 2. Walk commit chains from each branch
+    for (const ref of branchRefs) {
+      const commitHash = await this.refs.getRef(ref);
+      if (!commitHash) continue;
+
+      for await (const { hash, commit } of this.graph.log(commitHash)) {
+        if (reachable.has(hash)) break;
+        reachable.add(hash);
+
+        // Walk the prolly tree for this commit
+        if (commit.treeHash) {
+          await this._walkTree(commit.treeHash, reachable);
+        }
+      }
+    }
+
+    // 3. Mark working tree roots as reachable too
+    for (const ref of workingRefs) {
+      const treeHash = await this.refs.getRef(ref);
+      if (!treeHash) continue;
+      await this._walkTree(treeHash, reachable);
+    }
+
+    // 4. Collect unreachable hashes
+    const unreachable: Hash[] = [];
+    let bytesReclaimed = 0;
+    for await (const hash of this.store.hashes()) {
+      if (!reachable.has(hash)) {
+        const data = await this.store.get(hash);
+        if (data) bytesReclaimed += data.length;
+        unreachable.push(hash);
+      }
+    }
+
+    // 5. Delete unreachable blocks
+    if (unreachable.length > 0) {
+      await this.store.deleteBatch(unreachable);
+    }
+
+    return { blocksRemoved: unreachable.length, bytesReclaimed };
+  }
+
+  /** Recursively walk a prolly tree, adding all node hashes to the reachable set. */
+  private async _walkTree(hash: Hash, reachable: Set<Hash>): Promise<void> {
+    if (reachable.has(hash)) return;
+    reachable.add(hash);
+
+    const raw = await this.store.get(hash);
+    if (!raw) return;
+
+    // Byte 0 is the node type: 0 = leaf, 1 = internal
+    if (raw[0] === 1) {
+      const entries = decodeInternalNode(raw.slice(1));
+      for (const entry of entries) {
+        const childHex = bytesToHex(entry.childHash);
+        await this._walkTree(childHex, reachable);
+      }
+    }
+    // Leaf nodes are terminal; just marking as reachable is sufficient
   }
 
   // ── Convenience methods ──────────────────────────────────
