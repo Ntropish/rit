@@ -1,4 +1,4 @@
-export { MemoryStore, FileStore, FileRefStore } from './store/index.js';
+export { MemoryStore, FileStore, FileRefStore, CachedStore } from './store/index.js';
 export type { Hash, Store } from './store/index.js';
 
 export { hashBytes, hashString } from './hash/index.js';
