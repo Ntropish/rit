@@ -1,9 +1,13 @@
 #!/usr/bin/env bun
 import { createInterface } from 'node:readline';
-import { join, dirname, resolve } from 'node:path';
-import { existsSync, readdirSync } from 'node:fs';
+import { join, dirname, resolve, relative } from 'node:path';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { Repository } from '../repo/index.js';
 import { openSqliteStore } from '../store/sqlite.js';
+import { SchemaRegistry, EntityStore } from '../../packages/rit-schema/src/index.js';
+import { ModuleSchema, FunctionSchema, TypeDefSchema, VariableSchema } from '../../packages/rit-sync/src/schemas.js';
+import { typescriptPlugin } from '../../packages/rit-sync/src/plugins/typescript.js';
+import { FileIngester } from '../../packages/rit-sync/src/ingester.js';
 
 /**
  * Walk up from dir looking for a .rit file.
@@ -332,6 +336,85 @@ async function dispatch(repo: Repository, cmd: string, args: string[]): Promise<
     case 'GC': {
       const result = await repo.gc();
       console.log(`Removed ${result.blocksRemoved} block(s), reclaimed ${result.bytesReclaimed} bytes`);
+      return;
+    }
+
+    case 'INGEST': {
+      if (args.length < 1) { console.log('(error) INGEST requires a directory path'); return; }
+      const dir = resolve(args[0]);
+      if (!existsSync(dir)) { console.log(`(error) directory not found: ${dir}`); return; }
+
+      // Parse --commit-message flag
+      let commitMessage: string | null = null;
+      for (let i = 1; i < args.length; i++) {
+        if (args[i] === '--commit-message' && i + 1 < args.length) {
+          commitMessage = args[i + 1];
+          break;
+        }
+      }
+
+      // Set up entity store
+      const registry = new SchemaRegistry();
+      registry.register(ModuleSchema);
+      registry.register(FunctionSchema);
+      registry.register(TypeDefSchema);
+      registry.register(VariableSchema);
+      const entityStore = new EntityStore(repo, registry);
+      const ingester = new FileIngester(entityStore);
+
+      // Collect .ts files recursively
+      function collectTsFiles(d: string): string[] {
+        const files: string[] = [];
+        for (const entry of readdirSync(d)) {
+          const full = join(d, entry);
+          const stat = statSync(full);
+          if (stat.isDirectory()) {
+            if (entry === 'node_modules' || entry === '__tests__' || entry === 'test' || entry === 'dist') continue;
+            files.push(...collectTsFiles(full));
+          } else if (entry.endsWith('.ts') && !entry.endsWith('.d.ts') && !entry.endsWith('.spec.ts') && !entry.endsWith('.test.ts')) {
+            files.push(full);
+          }
+        }
+        return files;
+      }
+
+      const tsFiles = collectTsFiles(dir);
+      if (tsFiles.length === 0) { console.log('(error) no TypeScript files found'); return; }
+
+      let ingested = 0;
+      let failed = 0;
+      let fnCount = 0;
+      let typeCount = 0;
+      let varCount = 0;
+
+      for (const file of tsFiles) {
+        const modulePath = relative(dir, file).replace(/\.ts$/, '').replace(/\\/g, '/');
+        const source = readFileSync(file, 'utf-8');
+
+        try {
+          const writes = await ingester.ingestSource(source, modulePath, typescriptPlugin);
+          ingested++;
+          for (const w of writes) {
+            if (w.schema.prefix === 'fn') fnCount++;
+            else if (w.schema.prefix === 'typ') typeCount++;
+            else if (w.schema.prefix === 'var') varCount++;
+          }
+          console.log(`  OK: ${modulePath}`);
+        } catch (err: unknown) {
+          failed++;
+          const msg = err instanceof Error ? err.message : String(err);
+          console.log(`  FAIL: ${modulePath} — ${msg}`);
+        }
+      }
+
+      // Commit
+      const msg = commitMessage ?? `Ingest ${ingested} files from ${dir}`;
+      const db = repo.data();
+      const hash = await repo.commit(msg, db);
+
+      console.log(`\nIngested: ${ingested} files (${failed} failed)`);
+      console.log(`Entities: ${ingested} modules, ${fnCount} functions, ${typeCount} types, ${varCount} variables`);
+      console.log(`Committed: ${hash}`);
       return;
     }
 
