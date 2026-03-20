@@ -22,7 +22,9 @@ export type { GcResult } from './repo/index.js';
 export { HybridLogicalClock } from './hlc/index.js';
 export type { HlcTimestamp } from './hlc/index.js';
 
-export { collectMissingBlocks, collectCommitBlocks, packBlocks, unpackBlocks } from './sync/blocks.js';
-
-export { advertiseRefs, isAncestor, negotiateSync } from './sync/negotiation.js';
-export type { RefAdvertisement, BranchSync, SyncPlan } from './sync/negotiation.js';
+export {
+  collectMissingBlocks, collectCommitBlocks, packBlocks, unpackBlocks,
+  advertiseRefs, isAncestor, negotiateSync,
+  clone, push, pull,
+} from './sync/index.js';
+export type { RefAdvertisement, BranchSync, SyncPlan, SyncPeer, PushResult, PullResult } from './sync/index.js';

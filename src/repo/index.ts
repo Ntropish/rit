@@ -117,6 +117,23 @@ export class Repository {
     return new Repository(store, graph, refs, activeBranch, working, headCommitHash, hlc);
   }
 
+  // ── Accessors for sync ──────────────────────────────────
+
+  /** The underlying block store. */
+  get blockStore(): Store {
+    return this.store;
+  }
+
+  /** The ref store. */
+  get refStore(): RefStore {
+    return this.refs;
+  }
+
+  /** The commit graph. */
+  get commitGraph(): CommitGraph {
+    return this.graph;
+  }
+
   // ── Working tree ────────────────────────────────────────
 
   /** Get the current working tree (Redis data model). */
