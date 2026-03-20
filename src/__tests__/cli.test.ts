@@ -5,18 +5,23 @@ import { tmpdir } from 'node:os';
 import { mkdir, rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 
-const testDir = join(tmpdir(), `rit-cli-test-${randomUUID()}`);
+const testDirs: string[] = [];
 const cliPath = join(__dirname, '..', 'cli', 'index.ts');
 
 afterAll(async () => {
-  await rm(testDir, { recursive: true, force: true });
+  for (const dir of testDirs) {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 function runCli(commands: string[]): Promise<{ stdout: string; stderr: string; code: number | null }> {
   return new Promise(async (resolve) => {
+    const testDir = join(tmpdir(), `rit-cli-test-${randomUUID()}`);
+    testDirs.push(testDir);
     await mkdir(testDir, { recursive: true });
+    const ritFile = join(testDir, 'test.rit');
 
-    const proc = spawn('bun', ['run', cliPath], {
+    const proc = spawn('bun', ['run', cliPath, ritFile], {
       cwd: testDir,
       stdio: ['pipe', 'pipe', 'pipe'],
     });

@@ -48,12 +48,6 @@ const { store, refStore, close } = openSqliteStore(filePath);
 async function main() {
   const repo = await Repository.init(store, refStore);
 
-  // Restore HEAD state if refs exist
-  const branches = await repo.branches();
-  if (branches.length > 0 && branches.includes('main')) {
-    try { await repo.checkout('main'); } catch {}
-  }
-
   // If a command was passed, run it and exit
   if (commandArgs.length > 0) {
     try {
@@ -150,8 +144,13 @@ async function handleCommand(repo: Repository, line: string): Promise<void> {
 
     // ── Hash operations ────────────────────────────────
     case 'HSET': {
-      if (args.length < 3) { console.log('(error) HSET requires key, field, value'); return; }
-      await repo.hset(args[0], args[1], args[2]);
+      if (args.length < 3 || (args.length - 1) % 2 !== 0) {
+        console.log('(error) HSET requires key followed by field value pairs');
+        return;
+      }
+      for (let i = 1; i < args.length; i += 2) {
+        await repo.hset(args[0], args[i], args[i + 1]);
+      }
       console.log('OK');
       return;
     }

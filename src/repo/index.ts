@@ -58,10 +58,35 @@ export class Repository {
     const refs = refStore ?? new MemoryRefStore();
     const graph = new CommitGraph(store);
     const defaultBranch = config?.defaultBranch ?? 'main';
-    const emptyTree = new ProllyTree(store, null);
-    const working = new RedisDataModel(emptyTree);
 
-    return new Repository(store, graph, refs, defaultBranch, working, null);
+    // Restore the active branch from HEAD, or fall back to default
+    const headRef = await refs.getRef('HEAD');
+    const activeBranch = headRef ?? defaultBranch;
+
+    // Check for persisted working state (survives process restarts)
+    const workingHash = await refs.getRef(`refs/working/${activeBranch}`);
+    let working: RedisDataModel;
+    if (workingHash) {
+      const tree = new ProllyTree(store, workingHash);
+      working = new RedisDataModel(tree);
+    } else {
+      // Fall back to commit tree if no working state
+      const commitHash = await refs.getRef(`refs/heads/${activeBranch}`);
+      if (commitHash) {
+        const commit = await graph.getCommit(commitHash);
+        const treeHash = commit?.treeHash ?? null;
+        const tree = new ProllyTree(store, treeHash);
+        working = new RedisDataModel(tree);
+      } else {
+        const emptyTree = new ProllyTree(store, null);
+        working = new RedisDataModel(emptyTree);
+      }
+    }
+
+    // Check for existing HEAD commit on the active branch
+    const headCommitHash = await refs.getRef(`refs/heads/${activeBranch}`);
+
+    return new Repository(store, graph, refs, activeBranch, working, headCommitHash);
   }
 
   // ── Working tree ────────────────────────────────────────
@@ -72,8 +97,9 @@ export class Repository {
   }
 
   /** Update the working tree. Call this after performing Redis operations. */
-  setData(data: RedisDataModel): void {
+  async setData(data: RedisDataModel): Promise<void> {
     this._working = data;
+    await this._persistWorking();
   }
 
   /** Current branch name. */
@@ -84,6 +110,16 @@ export class Repository {
   /** Current HEAD commit hash (null if no commits yet). */
   get headCommitHash(): Hash | null {
     return this._headCommitHash;
+  }
+
+  // ── Working tree persistence ─────────────────────────────
+
+  /** Persist the working tree root hash so it survives process restarts. */
+  private async _persistWorking(): Promise<void> {
+    const rootHash = this._working.tree.rootHash;
+    if (rootHash !== null) {
+      await this.refs.setRef(`refs/working/${this._head}`, rootHash);
+    }
   }
 
   // ── Commit operations ───────────────────────────────────
@@ -106,6 +142,7 @@ export class Repository {
     const hash = await this.graph.createCommit(commit);
     await this.refs.setRef(`refs/heads/${this._head}`, hash);
     this._headCommitHash = hash;
+    await this._persistWorking();
     return hash;
   }
 
@@ -131,6 +168,9 @@ export class Repository {
 
   /** Switch to a different branch. Loads that branch's tree as working state. */
   async checkout(name: string): Promise<void> {
+    // Persist current working state before switching
+    await this._persistWorking();
+
     const commitHash = await this.refs.getRef(`refs/heads/${name}`);
     if (!commitHash) {
       throw new Error(`Branch '${name}' does not exist`);
@@ -139,10 +179,15 @@ export class Repository {
     if (!commit) {
       throw new Error(`Commit ${commitHash} not found`);
     }
-    const tree = new ProllyTree(this.store, commit.treeHash);
+
+    // Load working state: prefer persisted working tree, fall back to commit tree
+    const workingHash = await this.refs.getRef(`refs/working/${name}`);
+    const treeHash = workingHash ?? commit.treeHash;
+    const tree = new ProllyTree(this.store, treeHash);
     this._working = new RedisDataModel(tree);
     this._head = name;
     this._headCommitHash = commitHash;
+    await this.refs.setRef('HEAD', name);
   }
 
   /** List all branches. */
@@ -227,9 +272,11 @@ export class Repository {
       const mergeHash = await this.graph.createCommit(mergeCommit);
       await this.refs.setRef(`refs/heads/${this._head}`, mergeHash);
       this._headCommitHash = mergeHash;
+      await this._persistWorking();
       return { ...result, mergeCommitHash: mergeHash };
     }
 
+    await this._persistWorking();
     return result;
   }
 
@@ -244,7 +291,8 @@ export class Repository {
   }
 
   // ── Convenience methods ──────────────────────────────────
-  // These handle the data()/setData() threading internally.
+  // These handle the data()/setData() threading internally
+  // and persist the working tree after every mutation.
 
   async get(key: string): Promise<string | null> {
     return this._working.get(key);
@@ -252,10 +300,12 @@ export class Repository {
 
   async set(key: string, value: string): Promise<void> {
     this._working = await this._working.set(key, value);
+    await this._persistWorking();
   }
 
   async del(key: string): Promise<void> {
     this._working = await this._working.del(key);
+    await this._persistWorking();
   }
 
   async hget(key: string, field: string): Promise<string | null> {
@@ -264,6 +314,7 @@ export class Repository {
 
   async hset(key: string, field: string, value: string): Promise<void> {
     this._working = await this._working.hset(key, field, value);
+    await this._persistWorking();
   }
 
   async hgetall(key: string): Promise<Record<string, string>> {
@@ -272,10 +323,12 @@ export class Repository {
 
   async sadd(key: string, ...members: string[]): Promise<void> {
     this._working = await this._working.sadd(key, ...members);
+    await this._persistWorking();
   }
 
   async srem(key: string, ...members: string[]): Promise<void> {
     this._working = await this._working.srem(key, ...members);
+    await this._persistWorking();
   }
 
   async sismember(key: string, member: string): Promise<boolean> {
@@ -288,6 +341,7 @@ export class Repository {
 
   async zadd(key: string, score: number, member: string): Promise<void> {
     this._working = await this._working.zadd(key, score, member);
+    await this._persistWorking();
   }
 
   async zscore(key: string, member: string): Promise<number | null> {
@@ -300,14 +354,17 @@ export class Repository {
 
   async zrem(key: string, member: string): Promise<void> {
     this._working = await this._working.zrem(key, member);
+    await this._persistWorking();
   }
 
   async rpush(key: string, ...values: string[]): Promise<void> {
     this._working = await this._working.rpush(key, ...values);
+    await this._persistWorking();
   }
 
   async lpush(key: string, ...values: string[]): Promise<void> {
     this._working = await this._working.lpush(key, ...values);
+    await this._persistWorking();
   }
 
   async lrange(key: string, start: number, stop: number): Promise<string[]> {
