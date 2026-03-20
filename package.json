@@ -19,6 +19,7 @@
     "vitest": "^1.6.0"
   },
   "dependencies": {
+    "node-html-parser": "^7.1.0",
     "ts-morph": "^27.0.2"
   }
 }
