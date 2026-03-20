@@ -319,12 +319,12 @@ export class ProllyTree {
 
   async put(key: Uint8Array, value: Uint8Array): Promise<ProllyTree> {
     if (!this._rootHash) return this.buildFromSorted([{ key, value }]);
-    return this._pathCopyMutate([{ key, value }], []);
+    return this._topDownPathCopy(key, [{ key, value }], []);
   }
 
   async delete(key: Uint8Array): Promise<ProllyTree> {
     if (!this._rootHash) return this;
-    return this._pathCopyMutate([], [key]);
+    return this._topDownPathCopy(key, [], [key]);
   }
 
   async mutate(
@@ -347,6 +347,150 @@ export class ProllyTree {
     return this._pathCopyMutateWithChunks(leafChunks, puts, deletes);
   }
 
+  // ── True O(log n) path-copy for single put/delete ────────
+  //
+  // Walks root → leaf recording the path, modifies only the target
+  // leaf region (±1 neighbor for boundary safety), then rewrites
+  // each ancestor. Total I/O: O(height + 3) node loads/writes.
+
+  private async _topDownPathCopy(
+    key: Uint8Array,
+    puts: Array<{ key: Uint8Array; value: Uint8Array }>,
+    deletes: Uint8Array[],
+  ): Promise<ProllyTree> {
+    const { targetChunkSize, maxChunkMultiplier, hashLength } = this.config;
+    const max = targetChunkSize * maxChunkMultiplier;
+
+    // Phase 1: Walk root → leaf, recording path
+    interface PathFrame {
+      node: InternalNode;
+      childIndex: number;
+    }
+    const path: PathFrame[] = [];
+    let currentHash = this._rootHash!;
+    let leafEntries: LeafEntry[] | null = null;
+
+    while (true) {
+      const node = await loadNode(this.store, currentHash, hashLength);
+      if (node.type === NODE_TYPE_LEAF) {
+        leafEntries = node.entries;
+        break;
+      }
+      // Find child whose boundary key >= target key
+      let ci = node.entries.length - 1;
+      for (let i = 0; i < node.entries.length; i++) {
+        if (compareBytes(node.entries[i].key, key) >= 0) {
+          ci = i;
+          break;
+        }
+      }
+      path.push({ node, childIndex: ci });
+      currentHash = bytesToHex(node.entries[ci].childHash);
+    }
+
+    // Phase 2: Build the region (target leaf ±1 neighbor)
+    let regionEntries: LeafEntry[];
+    let regionStart: number;
+    let regionEnd: number;
+
+    if (path.length > 0) {
+      const parent = path[path.length - 1];
+      const ci = parent.childIndex;
+      regionStart = Math.max(0, ci - 1);
+      regionEnd = Math.min(parent.node.entries.length - 1, ci + 1);
+
+      regionEntries = [];
+      for (let i = regionStart; i <= regionEnd; i++) {
+        if (i === ci) {
+          regionEntries.push(...leafEntries!);
+        } else {
+          const hash = bytesToHex(parent.node.entries[i].childHash);
+          const neighbor = await loadNode(this.store, hash, hashLength);
+          if (neighbor.type === NODE_TYPE_LEAF) {
+            regionEntries.push(...neighbor.entries);
+          }
+        }
+      }
+    } else {
+      // Root is a leaf
+      regionEntries = [...leafEntries!];
+      regionStart = 0;
+      regionEnd = 0;
+    }
+
+    // Phase 3: Apply mutations
+    const deleteSet = new Set(deletes.map(d => bytesToHex(d)));
+    if (deleteSet.size > 0) {
+      regionEntries = regionEntries.filter(e => !deleteSet.has(bytesToHex(e.key)));
+    }
+    const sortedPuts = [...puts].sort((a, b) => compareBytes(a.key, b.key));
+    regionEntries = mergeSorted(regionEntries, sortedPuts);
+
+    // Phase 4: Re-chunk the region
+    if (regionEntries.length === 0 && path.length === 0) {
+      return new ProllyTree(this.store, null, this.config);
+    }
+
+    let newChunks: Array<{ hash: Hash; boundaryKey: Uint8Array }>;
+    if (regionEntries.length === 0) {
+      newChunks = [];
+    } else {
+      newChunks = await chunkLeaves(this.store, regionEntries, targetChunkSize, max);
+    }
+
+    // Phase 5: Walk back up the path, rewriting each ancestor
+    for (let p = path.length - 1; p >= 0; p--) {
+      const { node: parentNode } = path[p];
+
+      // Determine which child indices are being replaced
+      // At the leaf's parent: replace the region (±1 neighbors)
+      // At higher levels: replace the single child we just rewrote
+      const rStart = (p === path.length - 1) ? regionStart : path[p].childIndex;
+      const rEnd = (p === path.length - 1) ? regionEnd : path[p].childIndex;
+
+      // Build new child list: [unchanged left] + [new chunks] + [unchanged right]
+      const newEntries: InternalEntry[] = [];
+      for (let i = 0; i < rStart; i++) {
+        newEntries.push(parentNode.entries[i]);
+      }
+      for (const nc of newChunks) {
+        newEntries.push({ key: nc.boundaryKey, childHash: hexToBytes(nc.hash) });
+      }
+      for (let i = rEnd + 1; i < parentNode.entries.length; i++) {
+        newEntries.push(parentNode.entries[i]);
+      }
+
+      if (newEntries.length === 0) {
+        if (p === 0) return new ProllyTree(this.store, null, this.config);
+        newChunks = [];
+        continue;
+      }
+
+      // Write the updated internal node (or re-chunk if it exceeds max)
+      if (newEntries.length <= max) {
+        const written = await writeInternalNode(this.store, newEntries);
+        newChunks = [written];
+      } else {
+        newChunks = await chunkInternal(
+          this.store,
+          newEntries.map(e => ({ hash: bytesToHex(e.childHash), boundaryKey: e.key })),
+          targetChunkSize, max,
+        );
+      }
+    }
+
+    // Phase 6: Build root
+    if (newChunks.length === 0) {
+      return new ProllyTree(this.store, null, this.config);
+    }
+    if (newChunks.length === 1) {
+      return new ProllyTree(this.store, newChunks[0].hash, this.config);
+    }
+    const rootHash = await buildLevels(this.store, newChunks, targetChunkSize, max);
+    return new ProllyTree(this.store, rootHash, this.config);
+  }
+
+  /** @deprecated Use mutate() for batches. Kept for internal batch path. */
   private async _pathCopyMutate(
     puts: Array<{ key: Uint8Array; value: Uint8Array }>,
     deletes: Uint8Array[],

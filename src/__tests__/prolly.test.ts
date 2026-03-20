@@ -256,6 +256,35 @@ describe('ProllyTree — structural sharing under path-copy', () => {
     // Verify the mutation worked
     expect(decVal((await tree.get(key('k0250')))!)).toBe('MODIFIED');
   });
+
+  it('point mutation on 10k tree creates < 15 new nodes', async () => {
+    const store = new MemoryStore();
+    let tree = new ProllyTree(store);
+
+    const entries = [];
+    for (let i = 0; i < 10000; i++) {
+      entries.push({ key: key(`k${String(i).padStart(5, '0')}`), value: val(`v${i}`) });
+    }
+    entries.sort((a, b) => compareBytes(a.key, b.key));
+    tree = await tree.buildFromSorted(entries);
+
+    const nodesBefore = store.size;
+
+    // Single point mutation
+    tree = await tree.put(key('k05000'), val('CHANGED'));
+
+    const nodesAfter = store.size;
+    const newNodes = nodesAfter - nodesBefore;
+
+    // O(log n) path-copy: should create ~3 re-chunked leaf nodes
+    // + ~2-3 rewritten internal nodes. Well under 15.
+    expect(newNodes).toBeLessThan(15);
+
+    // Verify the mutation worked
+    expect(decVal((await tree.get(key('k05000')))!)).toBe('CHANGED');
+    // Verify an unmodified key is still correct
+    expect(decVal((await tree.get(key('k00001')))!)).toBe('v1');
+  });
 });
 
 describe('ProllyTree — subtree-pruned diff', () => {
