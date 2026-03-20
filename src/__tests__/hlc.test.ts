@@ -221,22 +221,4 @@ describe('Repository with HLC', () => {
     expect(entries[0].commit.message).toContain('Merge');
   });
 
-  it('old commits without HLC still sort by timestamp', async () => {
-    // Verify backward compatibility by encoding/decoding commits without hlc
-    const { encodeCommit, decodeCommit } = await import('../commit/index.js');
-
-    const oldCommit = {
-      treeHash: null,
-      parents: [],
-      timestamp: 1000,
-      message: 'old commit',
-    };
-
-    const encoded = encodeCommit(oldCommit);
-    const decoded = decodeCommit(encoded);
-
-    expect(decoded.hlc).toBeUndefined();
-    expect(decoded.timestamp).toBe(1000);
-    expect(decoded.message).toBe('old commit');
-  });
 });

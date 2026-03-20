@@ -3,11 +3,14 @@ import { MemoryStore } from '../store/index.js';
 import { CommitGraph, MemoryRefStore } from '../commit/index.js';
 import type { RefStore } from '../commit/index.js';
 import type { Hash } from '../store/types.js';
+import { HybridLogicalClock } from '../hlc/index.js';
 import {
   advertiseRefs,
   isAncestor,
   negotiateSync,
 } from '../sync/negotiation.js';
+
+const hlc = new HybridLogicalClock(HybridLogicalClock.generateNodeId());
 
 // Helper: create a commit with given parents
 async function makeCommit(
@@ -21,6 +24,7 @@ async function makeCommit(
     parents,
     timestamp: Date.now(),
     message,
+    hlc: hlc.tick(),
   });
 }
 

@@ -879,52 +879,6 @@ describe('Repository — redis+git integration', () => {
       expect(valueAB).toBe(valueBA);
     });
 
-    it('without HLCs: same key conflict still reported via threeWayMerge', async () => {
-      // Use threeWayMerge directly without MergeContext to test backward compat
-      const { threeWayMerge: merge3 } = await import('../merge/index.js');
-      const testStore = new MemoryStore();
-      const testRepo = await Repository.init(testStore);
-
-      let db2 = testRepo.data();
-      db2 = await db2.set('x', 'base');
-      await testRepo.commit('initial', db2);
-
-      await testRepo.branch('feature');
-      await testRepo.checkout('feature');
-      db2 = testRepo.data();
-      db2 = await db2.set('x', 'feature_val');
-      await testRepo.commit('feature', db2);
-
-      await testRepo.checkout('main');
-      db2 = testRepo.data();
-      db2 = await db2.set('x', 'main_val');
-      await testRepo.commit('main', db2);
-
-      // Get commit tree hashes
-      const { CommitGraph } = await import('../commit/index.js');
-      const graph = new CommitGraph(testStore);
-
-      const headHash = await testRepo['refs'].getRef('refs/heads/main');
-      const featureHash = await testRepo['refs'].getRef('refs/heads/feature');
-
-      const mainCommit = await graph.getCommit(headHash!);
-      const featureCommit = await graph.getCommit(featureHash!);
-
-      // Find base (initial commit)
-      const base = await graph.findMergeBase(headHash!, featureHash!);
-      const baseCommit = await graph.getCommit(base!);
-
-      // Call threeWayMerge without context (no HLCs)
-      const result = await merge3(
-        testStore,
-        baseCommit!.treeHash,
-        mainCommit!.treeHash,
-        featureCommit!.treeHash,
-      );
-
-      // Without HLC context, this should be a conflict
-      expect(result.conflicts.length).toBeGreaterThan(0);
-    });
   });
 
   // ── Snapshot / time travel ──────────────────────────────

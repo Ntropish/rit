@@ -46,8 +46,8 @@ interface MergeResolution {
 }
 
 export interface MergeContext {
-  oursHlc?: HlcTimestamp;
-  theirsHlc?: HlcTimestamp;
+  oursHlc: HlcTimestamp;
+  theirsHlc: HlcTimestamp;
 }
 
 interface MergeStrategy {
@@ -55,7 +55,7 @@ interface MergeStrategy {
     redisKey: string,
     ourDiffs: DiffEntry[],
     theirDiffs: DiffEntry[],
-    context?: MergeContext,
+    context: MergeContext,
   ): MergeResolution;
 }
 
@@ -114,7 +114,7 @@ const defaultStrategy: MergeStrategy = {
       } else if (ours && theirs) {
         if (sameDiff(ours, theirs)) {
           applyDiff(ours, puts, deletes);
-        } else if (context?.oursHlc && context?.theirsHlc) {
+        } else {
           // HLC-based last-writer-wins: higher HLC wins
           const cmp = HybridLogicalClock.compare(context.oursHlc, context.theirsHlc);
           if (cmp >= 0) {
@@ -122,13 +122,6 @@ const defaultStrategy: MergeStrategy = {
           } else {
             applyDiff(theirs, puts, deletes);
           }
-        } else {
-          conflicts.push({
-            key: ours.key,
-            base: ours.left ?? theirs.left,
-            ours: ours.right ?? undefined,
-            theirs: theirs.right ?? undefined,
-          });
         }
       }
     }
@@ -355,8 +348,8 @@ export async function threeWayMerge(
   baseHash: Hash | null,
   oursHash: Hash | null,
   theirsHash: Hash | null,
-  config?: { targetChunkSize?: number },
-  context?: MergeContext,
+  config: { targetChunkSize?: number } | undefined,
+  context: MergeContext,
 ): Promise<MergeResult> {
   const baseTree = new ProllyTree(store, baseHash, config);
   const oursTree = new ProllyTree(store, oursHash, config);
