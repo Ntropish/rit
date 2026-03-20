@@ -5,4 +5,7 @@ dist/
 *.rit-wal
 *.rit-shm
 
+# Temp build entrypoints
+*.entry.ts
+
 style-guide.md

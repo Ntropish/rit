@@ -51,7 +51,7 @@ async function main() {
   // If a command was passed, run it and exit
   if (commandArgs.length > 0) {
     try {
-      await handleCommand(repo, commandArgs.join(' '));
+      await handleCommandArgs(repo, commandArgs);
     } catch (err: any) {
       console.log(`(error) ${err.message}`);
     }
@@ -92,12 +92,24 @@ async function main() {
   rl.prompt();
 }
 
+/** Handle a command from pre-parsed args (direct command mode). */
+async function handleCommandArgs(repo: Repository, parts: string[]): Promise<void> {
+  if (parts.length === 0) return;
+  const cmd = parts[0].toUpperCase();
+  const args = parts.slice(1);
+  return dispatch(repo, cmd, args);
+}
+
 async function handleCommand(repo: Repository, line: string): Promise<void> {
   const parts = parseLine(line);
   if (parts.length === 0) return;
 
   const cmd = parts[0].toUpperCase();
   const args = parts.slice(1);
+  return dispatch(repo, cmd, args);
+}
+
+async function dispatch(repo: Repository, cmd: string, args: string[]): Promise<void> {
 
   switch (cmd) {
     // ── String operations ──────────────────────────────
