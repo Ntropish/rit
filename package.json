@@ -1,0 +1,17 @@
+{
+  "name": "rgit",
+  "version": "0.0.1",
+  "description": "Redis + Git: versioned key-value store built on prolly trees",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
+  }
+}
