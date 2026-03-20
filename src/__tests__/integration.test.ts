@@ -253,6 +253,64 @@ describe('Repository — redis+git integration', () => {
     });
   });
 
+  // ── KEYS enumeration ────────────────────────────────────
+
+  describe('KEYS command', () => {
+    async function collectKeys(db: any, pattern?: string): Promise<string[]> {
+      const keys: string[] = [];
+      for await (const k of db.keys(pattern)) keys.push(k);
+      return keys;
+    }
+
+    it('returns all distinct keys across mixed data types', async () => {
+      let db = repo.data();
+      db = await db.set('str1', 'val');
+      db = await db.hset('hash1', 'f', 'v');
+      db = await db.sadd('set1', 'a');
+      db = await db.zadd('zset1', 1, 'a');
+      db = await db.rpush('list1', 'a');
+
+      const keys = await collectKeys(db);
+      expect(keys.sort()).toEqual(['hash1', 'list1', 'set1', 'str1', 'zset1']);
+    });
+
+    it('filters with glob pattern', async () => {
+      let db = repo.data();
+      db = await db.set('user:alice', 'a');
+      db = await db.set('user:bob', 'b');
+      db = await db.set('session:1', 's');
+      db = await db.hset('user:charlie', 'name', 'c');
+
+      const userKeys = await collectKeys(db, 'user:*');
+      expect(userKeys.sort()).toEqual(['user:alice', 'user:bob', 'user:charlie']);
+    });
+
+    it('wildcard * returns all keys', async () => {
+      let db = repo.data();
+      db = await db.set('a', '1');
+      db = await db.set('b', '2');
+
+      const allKeys = await collectKeys(db, '*');
+      expect(allKeys.sort()).toEqual(['a', 'b']);
+    });
+
+    it('excludes deleted keys', async () => {
+      let db = repo.data();
+      db = await db.set('keep', '1');
+      db = await db.set('gone', '2');
+      db = await db.del('gone');
+
+      const keys = await collectKeys(db);
+      expect(keys).toEqual(['keep']);
+    });
+
+    it('returns nothing on empty store', async () => {
+      const db = repo.data();
+      const keys = await collectKeys(db);
+      expect(keys).toEqual([]);
+    });
+  });
+
   // ── Git operations ──────────────────────────────────────
 
   describe('commit and log', () => {

@@ -64,6 +64,21 @@ function decodeValue(b: Uint8Array): string {
   return TEXT_DECODER.decode(b);
 }
 
+// ── Glob matching ────────────────────────────────────────────
+
+function globToMatcher(pattern: string): (s: string) => boolean {
+  // Escape regex special chars except * and ?
+  let re = '';
+  for (const ch of pattern) {
+    if (ch === '*') re += '.*';
+    else if (ch === '?') re += '.';
+    else if ('.+^${}()|[]\\'.includes(ch)) re += '\\' + ch;
+    else re += ch;
+  }
+  const regex = new RegExp('^' + re + '$');
+  return (s: string) => regex.test(s);
+}
+
 // ── RedisDataModel ────────────────────────────────────────────
 
 /**
@@ -137,6 +152,18 @@ export class RedisDataModel {
       break;
     }
     return 'none';
+  }
+
+  async *keys(pattern?: string): AsyncIterable<string> {
+    const matcher = pattern != null ? globToMatcher(pattern) : null;
+    let lastKey: string | null = null;
+    for await (const entry of this._tree.entries()) {
+      const [redisKey] = decodeOrderedString(entry.key, 0);
+      if (redisKey === lastKey) continue;
+      lastKey = redisKey;
+      if (matcher && !matcher(redisKey)) continue;
+      yield redisKey;
+    }
   }
 
   // ── Hash operations ─────────────────────────────────────
