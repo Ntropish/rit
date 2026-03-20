@@ -15,7 +15,7 @@ import {
 export class RemoteSyncServer {
   private repo: Repository;
   private transport: SyncTransport;
-  private branchUpdatedCallback: ((branch: string, commitHash: Hash) => void) | null = null;
+  private branchUpdatedCallback: ((branch: string, commitHash: Hash, blocks: Array<{ hash: string; data: string }>) => void) | null = null;
 
   constructor(repo: Repository, transport: SyncTransport) {
     this.repo = repo;
@@ -23,7 +23,7 @@ export class RemoteSyncServer {
     transport.onMessage((msg) => this.handleMessage(msg));
   }
 
-  onBranchUpdated(callback: (branch: string, commitHash: Hash) => void): void {
+  onBranchUpdated(callback: (branch: string, commitHash: Hash, blocks: Array<{ hash: string; data: string }>) => void): void {
     this.branchUpdatedCallback = callback;
   }
 
@@ -75,9 +75,9 @@ export class RemoteSyncServer {
 
     await this.transport.send({ type: 'push-ack', branch, accepted: true });
 
-    // Notify branch updated
+    // Notify branch updated (pass through the encoded blocks for broadcast)
     if (this.branchUpdatedCallback) {
-      this.branchUpdatedCallback(branch, commitHash);
+      this.branchUpdatedCallback(branch, commitHash, blocks);
     }
   }
 
@@ -181,14 +181,42 @@ export class RemoteSyncClient {
   private repo: Repository;
   private transport: SyncTransport;
   private pendingHandlers: Array<(msg: SyncMessage) => void> = [];
+  private branchUpdatedCallback: ((branch: string, commitHash: Hash) => void) | null = null;
 
   constructor(repo: Repository, transport: SyncTransport) {
     this.repo = repo;
     this.transport = transport;
     transport.onMessage((msg) => {
+      if (msg.type === 'branch-updated') {
+        this.handleBranchUpdated(msg);
+        return;
+      }
       const handler = this.pendingHandlers.shift();
       if (handler) handler(msg);
     });
+  }
+
+  onBranchUpdated(callback: (branch: string, commitHash: Hash) => void): void {
+    this.branchUpdatedCallback = callback;
+  }
+
+  private async handleBranchUpdated(msg: import('./transport.js').BranchUpdatedMessage): Promise<void> {
+    const { branch, commitHash, blocks } = msg;
+
+    // Decode and apply blocks
+    const decoded = blocks.map(b => ({ hash: b.hash, data: decodeBlockData(b.data) }));
+    if (decoded.length > 0) {
+      await this.repo.blockStore.putBatch(decoded);
+    }
+
+    // Update local branch ref and clear working ref
+    await this.repo.refStore.setRef(`refs/heads/${branch}`, commitHash);
+    await this.repo.refStore.deleteRef(`refs/working/${branch}`);
+
+    // Fire callback
+    if (this.branchUpdatedCallback) {
+      this.branchUpdatedCallback(branch, commitHash);
+    }
   }
 
   private waitForMessage<T extends SyncMessage>(filter?: (msg: SyncMessage) => msg is T): Promise<T> {

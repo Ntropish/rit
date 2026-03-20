@@ -63,17 +63,12 @@ export function createRitServer(repo: Repository, options?: RitServerOptions): R
         const syncServer = new RemoteSyncServer(repo, transport);
 
         // On branch update from this client, broadcast to all others
-        syncServer.onBranchUpdated(async (branch, commitHash) => {
-          // Collect blocks for the updated commit to include in broadcast
-          const commit = await repo.commitGraph.getCommit(commitHash);
-          const treeBlocks: Array<{ hash: string; data: string }> = [];
-
-          // Broadcast branch-updated to all other connected clients
+        syncServer.onBranchUpdated((branch, commitHash, blocks) => {
           const message: BranchUpdatedMessage = {
             type: 'branch-updated',
             branch,
             commitHash,
-            blocks: treeBlocks,
+            blocks,
           };
 
           for (const [otherWs, otherState] of clients) {
