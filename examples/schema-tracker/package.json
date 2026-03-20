@@ -1,0 +1,21 @@
+{
+  "name": "@rit/schema-tracker",
+  "version": "0.0.1",
+  "description": "Database schema evolution tracker built on rit",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "rgit": "file:../../",
+    "@rit/schema": "file:../../packages/rit-schema",
+    "@rit/diff-render": "file:../../packages/rit-diff-render"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
+  }
+}
