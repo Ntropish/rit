@@ -14,7 +14,7 @@ export { CommitGraph, MemoryRefStore } from './commit/index.js';
 export type { Commit, RefStore } from './commit/index.js';
 
 export { threeWayMerge } from './merge/index.js';
-export type { MergeResult, MergeConflict } from './merge/index.js';
+export type { MergeResult, MergeConflict, MergeContext } from './merge/index.js';
 
 export { Repository } from './repo/index.js';
 export type { GcResult } from './repo/index.js';
@@ -26,5 +26,11 @@ export {
   collectMissingBlocks, collectCommitBlocks, packBlocks, unpackBlocks,
   advertiseRefs, isAncestor, negotiateSync,
   clone, push, pull,
+  createTransportPair, encodeBlockData, decodeBlockData,
+  RemoteSyncServer, RemoteSyncClient,
 } from './sync/index.js';
-export type { RefAdvertisement, BranchSync, SyncPlan, SyncPeer, PushResult, PullResult } from './sync/index.js';
+export type {
+  RefAdvertisement, BranchSync, SyncPlan, SyncPeer, PushResult, PullResult,
+  SyncTransport, SyncMessage, RefAdvertiseMessage, BlockRequestMessage, BlockResponseMessage,
+  PushMessage, PushAckMessage, PullRequestMessage, PullResponseMessage, BranchUpdatedMessage,
+} from './sync/index.js';

@@ -9,6 +9,9 @@ import { advertiseRefs, negotiateSync, isAncestor } from './negotiation.js';
 export { collectMissingBlocks, collectCommitBlocks, packBlocks, unpackBlocks } from './blocks.js';
 export { advertiseRefs, isAncestor, negotiateSync } from './negotiation.js';
 export type { RefAdvertisement, BranchSync, SyncPlan } from './negotiation.js';
+export { createTransportPair, encodeBlockData, decodeBlockData } from './transport.js';
+export type { SyncTransport, SyncMessage, RefAdvertiseMessage, BlockRequestMessage, BlockResponseMessage, PushMessage, PushAckMessage, PullRequestMessage, PullResponseMessage, BranchUpdatedMessage } from './transport.js';
+export { RemoteSyncServer, RemoteSyncClient } from './protocol.js';
 
 // ── Types ─────────────────────────────────────────────────────
 

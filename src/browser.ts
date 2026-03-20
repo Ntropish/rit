@@ -28,5 +28,11 @@ export {
   collectMissingBlocks, collectCommitBlocks, packBlocks, unpackBlocks,
   advertiseRefs, isAncestor, negotiateSync,
   clone, push, pull,
+  createTransportPair, encodeBlockData, decodeBlockData,
+  RemoteSyncServer, RemoteSyncClient,
 } from './sync/index.js';
-export type { RefAdvertisement, BranchSync, SyncPlan, SyncPeer, PushResult, PullResult } from './sync/index.js';
+export type {
+  RefAdvertisement, BranchSync, SyncPlan, SyncPeer, PushResult, PullResult,
+  SyncTransport, SyncMessage, RefAdvertiseMessage, BlockRequestMessage, BlockResponseMessage,
+  PushMessage, PushAckMessage, PullRequestMessage, PullResponseMessage, BranchUpdatedMessage,
+} from './sync/index.js';
