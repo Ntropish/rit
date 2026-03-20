@@ -1,5 +1,7 @@
 export { MemoryStore, FileStore, FileRefStore, CachedStore } from './store/index.js';
 export type { Hash, Store } from './store/index.js';
+// SqliteStore, SqliteRefStore, openSqliteStore are bun-only.
+// Import directly from './store/sqlite.js' when using bun.
 
 export { hashBytes, hashString } from './hash/index.js';
 

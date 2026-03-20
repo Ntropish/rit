@@ -2,11 +2,11 @@
 import { createInterface } from 'node:readline';
 import { join } from 'node:path';
 import { Repository } from '../repo/index.js';
-import { FileStore, FileRefStore } from '../store/fs.js';
+import { openSqliteStore } from '../store/sqlite.js';
 
-const ritDir = join(process.cwd(), '.rit');
-const store = new FileStore(ritDir);
-const refStore = new FileRefStore(ritDir);
+// Use CLI argument or default to project.rit in cwd
+const filePath = process.argv[2] ?? join(process.cwd(), 'project.rit');
+const { store, refStore, close } = openSqliteStore(filePath);
 
 async function main() {
   const repo = await Repository.init(store, refStore);
@@ -41,7 +41,10 @@ async function main() {
   });
 
   rl.on('close', () => {
-    queue.then(() => process.exit(0));
+    queue.then(() => {
+      close();
+      process.exit(0);
+    });
   });
 
   rl.prompt();
