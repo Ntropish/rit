@@ -27,6 +27,30 @@ function findRitFile(dir: string): string | null {
   }
 }
 
+// Handle CLONE before file path resolution (it creates a new .rit file)
+if (process.argv[2]?.toUpperCase() === 'CLONE') {
+  const wsUrl = process.argv[3];
+  const outputPath = resolve(process.argv[4] ?? 'repo.rit');
+  if (!wsUrl) {
+    console.error('Usage: rit CLONE <ws-url> [output-path]');
+    process.exit(1);
+  }
+
+  const { RemoteRepository } = await import('../sync/remote-repo.js');
+  const { store: cloneStore, refStore: cloneRefs, close: closeClone } = openSqliteStore(outputPath);
+  try {
+    const remote = await RemoteRepository.clone(wsUrl, cloneStore, cloneRefs);
+    // Store origin URL
+    await cloneRefs.setRef('refs/remotes/origin/url', wsUrl);
+    remote.close();
+    console.log(`Cloned to ${outputPath}`);
+  } catch (err: any) {
+    console.error(`(error) ${err.message}`);
+  }
+  closeClone();
+  process.exit(0);
+}
+
 // Resolve file path and command args:
 // - If first arg ends with .rit, treat it as the file
 // - Otherwise, auto-detect by walking up from cwd
@@ -415,6 +439,82 @@ async function dispatch(repo: Repository, cmd: string, args: string[]): Promise<
       console.log(`\nIngested: ${ingested} files (${failed} failed)`);
       console.log(`Entities: ${ingested} modules, ${fnCount} functions, ${typeCount} types, ${varCount} variables`);
       console.log(`Committed: ${hash}`);
+      return;
+    }
+
+    case 'REMOTE': {
+      const sub = args[0]?.toUpperCase();
+      if (sub === 'ADD') {
+        if (args.length < 3) { console.log('(error) REMOTE ADD requires <name> <url>'); return; }
+        const name = args[1];
+        const url = args[2];
+        await repo.refStore.setRef(`refs/remotes/${name}/url`, url);
+        console.log(`Remote '${name}' added: ${url}`);
+      } else {
+        // LIST (default)
+        const allRefs = await repo.refStore.listRefs();
+        const remotes = allRefs.filter(r => r.startsWith('refs/remotes/') && r.endsWith('/url'));
+        if (remotes.length === 0) { console.log('(no remotes)'); return; }
+        for (const ref of remotes) {
+          const name = ref.slice('refs/remotes/'.length, ref.length - '/url'.length);
+          const url = await repo.refStore.getRef(ref);
+          console.log(`${name}\t${url}`);
+        }
+      }
+      return;
+    }
+
+    case 'PUSH': {
+      const remoteName = args[0] ?? 'origin';
+      const branch = args[1] ?? repo.currentBranch;
+      const url = await repo.refStore.getRef(`refs/remotes/${remoteName}/url`);
+      if (!url) { console.log(`(error) remote '${remoteName}' not found. Use REMOTE ADD first.`); return; }
+
+      const { WebSocketClientTransport } = await import('../sync/ws-client.js');
+      const { RemoteSyncClient } = await import('../sync/protocol.js');
+      const transport = new WebSocketClientTransport(url);
+      try {
+        await transport.connect();
+        const client = new RemoteSyncClient(repo, transport);
+        const result = await client.push(branch);
+        if (result.accepted) {
+          console.log(`Pushed ${branch} to ${remoteName}`);
+        } else {
+          console.log(`Push rejected: ${result.reason ?? 'diverged (pull and merge first)'}`);
+        }
+      } catch (err: any) {
+        console.log(`(error) ${err.message}`);
+      } finally {
+        transport.close();
+      }
+      return;
+    }
+
+    case 'PULL': {
+      const remoteName = args[0] ?? 'origin';
+      const branch = args[1] ?? repo.currentBranch;
+      const url = await repo.refStore.getRef(`refs/remotes/${remoteName}/url`);
+      if (!url) { console.log(`(error) remote '${remoteName}' not found. Use REMOTE ADD first.`); return; }
+
+      const { WebSocketClientTransport } = await import('../sync/ws-client.js');
+      const { RemoteSyncClient } = await import('../sync/protocol.js');
+      const transport = new WebSocketClientTransport(url);
+      try {
+        await transport.connect();
+        const client = new RemoteSyncClient(repo, transport);
+        const result = await client.pull(branch);
+        if (result.status === 'ok') {
+          console.log(`Pulled ${branch} from ${remoteName}`);
+        } else if (result.status === 'up-to-date') {
+          console.log('Already in sync');
+        } else {
+          console.log(`Pull status: ${result.status}`);
+        }
+      } catch (err: any) {
+        console.log(`(error) ${err.message}`);
+      } finally {
+        transport.close();
+      }
       return;
     }
 
