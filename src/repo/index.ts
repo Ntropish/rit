@@ -4,6 +4,7 @@ import { RedisDataModel } from '../types/index.js';
 import { CommitGraph, MemoryRefStore, type Commit, type RefStore } from '../commit/index.js';
 import { threeWayMerge, type MergeResult } from '../merge/index.js';
 import { decodeInternalNode } from '../encoding/index.js';
+import { HybridLogicalClock } from '../hlc/index.js';
 import type { DiffEntry } from '../prolly/index.js';
 
 function bytesToHex(bytes: Uint8Array): string {
@@ -52,6 +53,7 @@ export class Repository {
   private _head: string; // current branch name
   private _working: RedisDataModel; // working tree (uncommitted state)
   private _headCommitHash: Hash | null; // commit that HEAD points to
+  private _hlc: HybridLogicalClock;
 
   private constructor(
     store: Store,
@@ -60,6 +62,7 @@ export class Repository {
     head: string,
     working: RedisDataModel,
     headCommitHash: Hash | null,
+    hlc: HybridLogicalClock,
   ) {
     this.store = store;
     this.graph = graph;
@@ -67,6 +70,7 @@ export class Repository {
     this._head = head;
     this._working = working;
     this._headCommitHash = headCommitHash;
+    this._hlc = hlc;
   }
 
   /** Initialize a new empty repository. */
@@ -102,7 +106,15 @@ export class Repository {
     // Check for existing HEAD commit on the active branch
     const headCommitHash = await refs.getRef(`refs/heads/${activeBranch}`);
 
-    return new Repository(store, graph, refs, activeBranch, working, headCommitHash);
+    // Initialize HLC: load or generate nodeId
+    let nodeId = await refs.getRef('refs/meta/node-id');
+    if (!nodeId) {
+      nodeId = HybridLogicalClock.generateNodeId();
+      await refs.setRef('refs/meta/node-id', nodeId);
+    }
+    const hlc = new HybridLogicalClock(nodeId);
+
+    return new Repository(store, graph, refs, activeBranch, working, headCommitHash, hlc);
   }
 
   // ── Working tree ────────────────────────────────────────
@@ -153,6 +165,7 @@ export class Repository {
       parents,
       timestamp: Date.now(),
       message,
+      hlc: this._hlc.tick(),
     };
 
     const hash = await this.graph.createCommit(commit);
@@ -284,6 +297,7 @@ export class Repository {
         parents: [this._headCommitHash, otherCommitHash],
         timestamp: Date.now(),
         message: `Merge branch '${otherBranch}' into ${this._head}`,
+        hlc: this._hlc.tick(),
       };
       const mergeHash = await this.graph.createCommit(mergeCommit);
       await this.refs.setRef(`refs/heads/${this._head}`, mergeHash);

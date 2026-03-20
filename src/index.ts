@@ -18,3 +18,6 @@ export type { MergeResult, MergeConflict } from './merge/index.js';
 
 export { Repository } from './repo/index.js';
 export type { GcResult } from './repo/index.js';
+
+export { HybridLogicalClock } from './hlc/index.js';
+export type { HlcTimestamp } from './hlc/index.js';

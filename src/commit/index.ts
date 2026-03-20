@@ -1,5 +1,6 @@
 import type { Hash, Store } from '../store/types.js';
 import { hashBytes } from '../hash/index.js';
+import { HybridLogicalClock, type HlcTimestamp } from '../hlc/index.js';
 
 // ── Commit object ─────────────────────────────────────────────
 
@@ -12,6 +13,8 @@ export interface Commit {
   timestamp: number;
   /** Human-readable message. */
   message: string;
+  /** Hybrid logical clock timestamp for causal ordering. Optional for backward compat. */
+  hlc?: HlcTimestamp;
 }
 
 const TEXT_ENCODER = new TextEncoder();
@@ -20,19 +23,27 @@ const TEXT_DECODER = new TextDecoder();
 /** Canonical JSON encoding for commits. Deterministic: sorted keys, no whitespace. */
 export function encodeCommit(commit: Commit): Uint8Array {
   // Hand-rolled deterministic JSON (no reliance on JSON.stringify key order)
-  const json = `{"message":${JSON.stringify(commit.message)},"parents":[${commit.parents.map(p => `"${p}"`).join(',')}],"timestamp":${commit.timestamp},"treeHash":${commit.treeHash ? `"${commit.treeHash}"` : 'null'}}`;
+  // Alphabetical key order: hlc, message, parents, timestamp, treeHash
+  const hlcPart = commit.hlc
+    ? `"hlc":{"logical":${commit.hlc.logical},"nodeId":"${commit.hlc.nodeId}","wallTime":${commit.hlc.wallTime}},`
+    : '';
+  const json = `{${hlcPart}"message":${JSON.stringify(commit.message)},"parents":[${commit.parents.map(p => `"${p}"`).join(',')}],"timestamp":${commit.timestamp},"treeHash":${commit.treeHash ? `"${commit.treeHash}"` : 'null'}}`;
   return TEXT_ENCODER.encode(json);
 }
 
 export function decodeCommit(data: Uint8Array): Commit {
   const json = TEXT_DECODER.decode(data);
   const obj = JSON.parse(json);
-  return {
+  const commit: Commit = {
     treeHash: obj.treeHash ?? null,
     parents: obj.parents ?? [],
     timestamp: obj.timestamp,
     message: obj.message ?? '',
   };
+  if (obj.hlc) {
+    commit.hlc = obj.hlc;
+  }
+  return commit;
 }
 
 // ── Ref storage ───────────────────────────────────────────────
@@ -101,7 +112,13 @@ export class CommitGraph {
       const commit = await this.getCommit(h);
       if (commit) {
         queue.push({ hash: h, commit });
-        queue.sort((a, b) => b.commit.timestamp - a.commit.timestamp);
+        queue.sort((a, b) => {
+          // Sort by HLC when both commits have it; fall back to timestamp
+          if (a.commit.hlc && b.commit.hlc) {
+            return HybridLogicalClock.compare(b.commit.hlc, a.commit.hlc);
+          }
+          return b.commit.timestamp - a.commit.timestamp;
+        });
       }
     };
 
