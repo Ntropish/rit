@@ -448,6 +448,157 @@ describe('Repository — redis+git integration', () => {
       expect(user).toEqual({ name: 'alice', age: '31', city: 'denver' });
     });
 
+    it('conflict: same hash field modified differently on both sides', async () => {
+      let db = repo.data();
+      db = await db.hmset('config', { theme: 'light', lang: 'en' });
+      await repo.commit('initial', db);
+
+      await repo.branch('feature');
+      await repo.checkout('feature');
+      db = repo.data();
+      db = await db.hset('config', 'theme', 'dark');
+      await repo.commit('feature theme', db);
+
+      await repo.checkout('main');
+      db = repo.data();
+      db = await db.hset('config', 'theme', 'solarized');
+      await repo.commit('main theme', db);
+
+      const result = await repo.merge('feature');
+      expect(result.conflicts.length).toBeGreaterThan(0);
+    });
+
+    it('clean merge: same hash field set to same value on both sides', async () => {
+      let db = repo.data();
+      db = await db.hmset('config', { theme: 'light', lang: 'en' });
+      await repo.commit('initial', db);
+
+      await repo.branch('feature');
+      await repo.checkout('feature');
+      db = repo.data();
+      db = await db.hset('config', 'theme', 'dark');
+      await repo.commit('feature theme', db);
+
+      await repo.checkout('main');
+      db = repo.data();
+      db = await db.hset('config', 'theme', 'dark');
+      await repo.commit('main theme', db);
+
+      const result = await repo.merge('feature');
+      expect(result.conflicts).toHaveLength(0);
+
+      db = repo.data();
+      const config = await db.hgetall('config');
+      expect(config).toEqual({ theme: 'dark', lang: 'en' });
+    });
+
+    it('clean merge: one side adds hash field while other modifies existing', async () => {
+      let db = repo.data();
+      db = await db.hmset('user', { name: 'alice', age: '30' });
+      await repo.commit('initial', db);
+
+      await repo.branch('feature');
+      await repo.checkout('feature');
+      db = repo.data();
+      db = await db.hset('user', 'email', 'alice@test.com');
+      await repo.commit('add email', db);
+
+      await repo.checkout('main');
+      db = repo.data();
+      db = await db.hset('user', 'age', '31');
+      await repo.commit('birthday', db);
+
+      const result = await repo.merge('feature');
+      expect(result.conflicts).toHaveLength(0);
+
+      db = repo.data();
+      const user = await db.hgetall('user');
+      expect(user).toEqual({ name: 'alice', age: '31', email: 'alice@test.com' });
+    });
+
+    it('clean merge: one side deletes hash field while other modifies different field', async () => {
+      let db = repo.data();
+      db = await db.hmset('user', { name: 'alice', age: '30', tmp: 'remove_me' });
+      await repo.commit('initial', db);
+
+      await repo.branch('feature');
+      await repo.checkout('feature');
+      db = repo.data();
+      db = await db.hdel('user', 'tmp');
+      await repo.commit('cleanup', db);
+
+      await repo.checkout('main');
+      db = repo.data();
+      db = await db.hset('user', 'age', '31');
+      await repo.commit('birthday', db);
+
+      const result = await repo.merge('feature');
+      expect(result.conflicts).toHaveLength(0);
+
+      db = repo.data();
+      const user = await db.hgetall('user');
+      expect(user).toEqual({ name: 'alice', age: '31' });
+    });
+
+    it('clean merge: concurrent edits to different fields of entity hash', async () => {
+      // Real-world case: two branches modify different properties of a function entity
+      let db = repo.data();
+      db = await db.hmset('fn:utils:add', {
+        body: '{ return a + b; }',
+        params: 'a: number, b: number',
+        returnType: 'number',
+        exported: 'true',
+      });
+      await repo.commit('initial function', db);
+
+      await repo.branch('feature');
+      await repo.checkout('feature');
+      db = repo.data();
+      db = await db.hset('fn:utils:add', 'body', '{ return a + b + 0; }');
+      await repo.commit('fix body', db);
+
+      await repo.checkout('main');
+      db = repo.data();
+      db = await db.hset('fn:utils:add', 'returnType', 'bigint');
+      await repo.commit('change return type', db);
+
+      const result = await repo.merge('feature');
+      expect(result.conflicts).toHaveLength(0);
+
+      db = repo.data();
+      const fn = await db.hgetall('fn:utils:add');
+      expect(fn).toEqual({
+        body: '{ return a + b + 0; }',
+        params: 'a: number, b: number',
+        returnType: 'bigint',
+        exported: 'true',
+      });
+    });
+
+    it('conflict: both sides modify same field of entity hash', async () => {
+      let db = repo.data();
+      db = await db.hmset('fn:utils:add', {
+        body: '{ return a + b; }',
+        params: 'a: number, b: number',
+        returnType: 'number',
+      });
+      await repo.commit('initial function', db);
+
+      await repo.branch('feature');
+      await repo.checkout('feature');
+      db = repo.data();
+      db = await db.hset('fn:utils:add', 'body', '{ return a + b + 0; }');
+      await repo.commit('fix body one way', db);
+
+      await repo.checkout('main');
+      db = repo.data();
+      db = await db.hset('fn:utils:add', 'body', '{ return Number(a) + Number(b); }');
+      await repo.commit('fix body another way', db);
+
+      const result = await repo.merge('feature');
+      expect(result.conflicts.length).toBeGreaterThan(0);
+    });
+
     it('conflict: both sides modify same key differently', async () => {
       let db = repo.data();
       db = await db.set('x', 'base');
