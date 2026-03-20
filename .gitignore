@@ -4,3 +4,5 @@ dist/
 # SQLite WAL/SHM artifacts
 *.rit-wal
 *.rit-shm
+
+style-guide.md
