@@ -2,7 +2,7 @@ import { ProllyTree } from '../prolly/index.js';
 import {
   encodeOrderedString, decodeOrderedString,
   encodeOrderedFloat64, decodeOrderedFloat64,
-  encodeUint8,
+  encodeUint8, decodeUint8,
   compositeKey,
   compareBytes,
 } from '../encoding/index.js';
@@ -100,12 +100,43 @@ export class RedisDataModel {
   }
 
   async del(key: string): Promise<RedisDataModel> {
-    // Delete the string key itself
-    let tree = await this._tree.delete(stringKey(key));
-    // Also clean up any hash/list/set/zset sub-keys
-    // This is a simplification — a full implementation would
-    // track the type of each key to avoid scanning all namespaces
+    // Prefix-scan all type namespaces for this key and delete everything
+    const pfx = compositeKey(encodeOrderedString(key));
+    const deletes: Uint8Array[] = [];
+    for await (const entry of this._tree.prefix(pfx)) {
+      deletes.push(entry.key);
+    }
+    if (deletes.length === 0) return this;
+    const tree = await this._tree.mutate([], deletes);
     return this._withTree(tree);
+  }
+
+  // ── Key introspection ───────────────────────────────────
+
+  async exists(key: string): Promise<boolean> {
+    const pfx = encodeOrderedString(key);
+    for await (const _entry of this._tree.prefix(pfx)) {
+      return true;
+    }
+    return false;
+  }
+
+  async type(key: string): Promise<'string' | 'hash' | 'set' | 'zset' | 'list' | 'none'> {
+    const pfx = encodeOrderedString(key);
+    for await (const entry of this._tree.prefix(pfx)) {
+      const [tag] = decodeUint8(entry.key, pfx.length);
+      switch (tag) {
+        case TYPE_STRING:      return 'string';
+        case TYPE_HASH:        return 'hash';
+        case TYPE_LIST_META:
+        case TYPE_LIST_ITEM:   return 'list';
+        case TYPE_SET:         return 'set';
+        case TYPE_ZSET_MEMBER:
+        case TYPE_ZSET_SCORE:  return 'zset';
+      }
+      break;
+    }
+    return 'none';
   }
 
   // ── Hash operations ─────────────────────────────────────

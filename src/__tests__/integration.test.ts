@@ -28,6 +28,37 @@ describe('Repository — redis+git integration', () => {
       db = await db.set('name', 'bob');
       expect(await db.get('name')).toBe('bob');
     });
+
+    it('DEL after HSET removes all fields', async () => {
+      let db = repo.data();
+      db = await db.hmset('h', { a: '1', b: '2', c: '3' });
+      db = await db.del('h');
+
+      const all = await db.hgetall('h');
+      expect(all).toEqual({});
+    });
+
+    it('DEL after SADD removes all members', async () => {
+      let db = repo.data();
+      db = await db.sadd('s', 'x', 'y', 'z');
+      db = await db.del('s');
+
+      const members = await db.smembers('s');
+      expect(members).toEqual([]);
+      expect(await db.sismember('s', 'x')).toBe(false);
+    });
+
+    it('DEL after ZADD removes both indices', async () => {
+      let db = repo.data();
+      db = await db.zadd('z', 10, 'alice');
+      db = await db.zadd('z', 20, 'bob');
+      db = await db.del('z');
+
+      expect(await db.zscore('z', 'alice')).toBeNull();
+      expect(await db.zscore('z', 'bob')).toBeNull();
+      const range = await db.zrange('z', 0, -1);
+      expect(range).toEqual([]);
+    });
   });
 
   describe('hash operations', () => {
@@ -152,6 +183,73 @@ describe('Repository — redis+git integration', () => {
 
       expect(await db.lrange('l', 1, 3)).toEqual(['b', 'c', 'd']);
       expect(await db.lrange('l', -2, -1)).toEqual(['d', 'e']);
+    });
+  });
+
+  // ── EXISTS / TYPE ───────────────────────────────────────
+
+  describe('EXISTS command', () => {
+    it('returns true for each data type after creation', async () => {
+      let db = repo.data();
+      db = await db.set('sk', 'val');
+      db = await db.hset('hk', 'f', 'v');
+      db = await db.sadd('setk', 'a');
+      db = await db.zadd('zk', 1, 'a');
+      db = await db.rpush('lk', 'a');
+
+      expect(await db.exists('sk')).toBe(true);
+      expect(await db.exists('hk')).toBe(true);
+      expect(await db.exists('setk')).toBe(true);
+      expect(await db.exists('zk')).toBe(true);
+      expect(await db.exists('lk')).toBe(true);
+    });
+
+    it('returns false for nonexistent key', async () => {
+      const db = repo.data();
+      expect(await db.exists('nope')).toBe(false);
+    });
+
+    it('returns false after del', async () => {
+      let db = repo.data();
+      db = await db.set('gone', 'val');
+      expect(await db.exists('gone')).toBe(true);
+      db = await db.del('gone');
+      expect(await db.exists('gone')).toBe(false);
+    });
+
+    it('does not match prefix keys', async () => {
+      let db = repo.data();
+      db = await db.set('foo', 'val');
+      db = await db.set('foobar', 'val2');
+
+      expect(await db.exists('foo')).toBe(true);
+      expect(await db.exists('foobar')).toBe(true);
+      // After deleting 'foo', 'foobar' should still exist
+      db = await db.del('foo');
+      expect(await db.exists('foo')).toBe(false);
+      expect(await db.exists('foobar')).toBe(true);
+    });
+  });
+
+  describe('TYPE command', () => {
+    it('returns correct type for each data type', async () => {
+      let db = repo.data();
+      db = await db.set('sk', 'val');
+      db = await db.hset('hk', 'f', 'v');
+      db = await db.sadd('setk', 'a');
+      db = await db.zadd('zk', 1, 'a');
+      db = await db.rpush('lk', 'a');
+
+      expect(await db.type('sk')).toBe('string');
+      expect(await db.type('hk')).toBe('hash');
+      expect(await db.type('setk')).toBe('set');
+      expect(await db.type('zk')).toBe('zset');
+      expect(await db.type('lk')).toBe('list');
+    });
+
+    it('returns none for nonexistent key', async () => {
+      const db = repo.data();
+      expect(await db.type('nope')).toBe('none');
     });
   });
 
