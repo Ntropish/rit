@@ -7,6 +7,7 @@ export const ModuleSchema: EntitySchema = {
     path: { type: 'string', required: true },
     imports: { type: 'ref[]', refTarget: 'mod' },
     importDeclarations: { type: 'ref[]' },
+    exportDeclarations: { type: 'ref[]' },
   },
 };
 
@@ -24,6 +25,7 @@ export const FunctionSchema: EntitySchema = {
     order: { type: 'number', required: true },
     jsdoc: { type: 'string' },
     typeParams: { type: 'string' },
+    isDefault: { type: 'boolean' },
   },
 };
 
@@ -39,6 +41,7 @@ export const TypeDefSchema: EntitySchema = {
     order: { type: 'number', required: true },
     typeParams: { type: 'string' },
     heritage: { type: 'string' },
+    isDefault: { type: 'boolean' },
   },
 };
 
@@ -53,5 +56,6 @@ export const VariableSchema: EntitySchema = {
     typeAnnotation: { type: 'string' },
     initializer: { type: 'string', required: true },
     order: { type: 'number', required: true },
+    isDefault: { type: 'boolean' },
   },
 };

@@ -34,6 +34,12 @@ export const typescriptPlugin: LanguagePlugin = {
       importDeclarations.push(imp.getText());
     }
 
+    // Collect re-export declarations
+    const exportDeclarations: string[] = [];
+    for (const exp of sourceFile.getExportDeclarations()) {
+      exportDeclarations.push(exp.getText());
+    }
+
     // Module entity
     writes.push({
       schema: ModuleSchema,
@@ -41,6 +47,7 @@ export const typescriptPlugin: LanguagePlugin = {
         path: modulePath,
         imports: importPaths,
         importDeclarations,
+        ...(exportDeclarations.length > 0 ? { exportDeclarations } : {}),
       },
     });
 
@@ -63,6 +70,7 @@ export const typescriptPlugin: LanguagePlugin = {
         const params = statement.getParameters().map(p => p.getText()).join(', ');
         const returnType = statement.getReturnTypeNode()?.getText();
         const typeParams = getTypeParamsText(statement);
+        const isDefault = statement.isDefaultExport();
 
         writes.push({
           schema: FunctionSchema,
@@ -77,6 +85,7 @@ export const typescriptPlugin: LanguagePlugin = {
             order,
             ...(jsdoc ? { jsdoc } : {}),
             ...(typeParams ? { typeParams } : {}),
+            ...(isDefault ? { isDefault } : {}),
           },
         });
         order++;
@@ -84,6 +93,7 @@ export const typescriptPlugin: LanguagePlugin = {
         const name = statement.getName();
         const body = getBodyFromBraces(statement);
         const typeParams = getTypeParamsText(statement);
+        const isDefault = statement.isDefaultExport();
 
         // Heritage (extends)
         const extendsClause = statement.getExtends();
@@ -102,6 +112,7 @@ export const typescriptPlugin: LanguagePlugin = {
             order,
             ...(typeParams ? { typeParams } : {}),
             ...(heritage ? { heritage } : {}),
+            ...(isDefault ? { isDefault } : {}),
           },
         });
         order++;
@@ -146,6 +157,7 @@ export const typescriptPlugin: LanguagePlugin = {
 
         const body = getBodyFromBraces(statement);
         const typeParams = getTypeParamsText(statement);
+        const isDefault = statement.isDefaultExport();
 
         // Heritage (extends + implements)
         const heritageParts: string[] = [];
@@ -170,11 +182,13 @@ export const typescriptPlugin: LanguagePlugin = {
             order,
             ...(typeParams ? { typeParams } : {}),
             ...(heritage ? { heritage } : {}),
+            ...(isDefault ? { isDefault } : {}),
           },
         });
         order++;
       } else if (Node.isVariableStatement(statement)) {
         const exported = statement.isExported();
+        const isDefault = statement.isDefaultExport();
         const declList = statement.getDeclarationList();
         const declKind = declList.getDeclarationKind();
 
@@ -195,6 +209,7 @@ export const typescriptPlugin: LanguagePlugin = {
               initializer: initText,
               order,
               ...(typeAnnotation ? { typeAnnotation } : {}),
+              ...(isDefault ? { isDefault } : {}),
             },
           });
           order++;
@@ -238,7 +253,7 @@ export const typescriptPlugin: LanguagePlugin = {
         if (d.jsdoc) {
           lines.push(d.jsdoc as string);
         }
-        const exportKw = d.exported ? 'export ' : '';
+        const exportKw = d.isDefault ? 'export default ' : d.exported ? 'export ' : '';
         const asyncKw = d.async ? 'async ' : '';
         const typeParams = d.typeParams ? (d.typeParams as string) : '';
         const params = d.params as string;
@@ -248,7 +263,7 @@ export const typescriptPlugin: LanguagePlugin = {
         lines.push('');
       } else if (decl.kind === 'variable') {
         const d = decl.data;
-        const exportKw = d.exported ? 'export ' : '';
+        const exportKw = d.isDefault ? 'export default ' : d.exported ? 'export ' : '';
         const declKind = d.declarationKind as string;
         const typeAnn = d.typeAnnotation ? `: ${d.typeAnnotation}` : '';
         const init = d.initializer as string;
@@ -256,7 +271,7 @@ export const typescriptPlugin: LanguagePlugin = {
         lines.push('');
       } else {
         const d = decl.data;
-        const exportKw = d.exported ? 'export ' : '';
+        const exportKw = d.isDefault ? 'export default ' : d.exported ? 'export ' : '';
         const kind = d.kind as string;
         const typeParams = d.typeParams ? (d.typeParams as string) : '';
         const heritage = d.heritage ? ` ${d.heritage}` : '';
@@ -273,6 +288,15 @@ export const typescriptPlugin: LanguagePlugin = {
         }
         lines.push('');
       }
+    }
+
+    // Export declarations (re-exports)
+    const exportDecls = entities.module.exportDeclarations as string[] | undefined;
+    if (exportDecls && exportDecls.length > 0) {
+      for (const decl of exportDecls) {
+        lines.push(decl);
+      }
+      lines.push('');
     }
 
     return lines.join('\n');

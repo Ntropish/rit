@@ -337,4 +337,61 @@ export enum Status {
     expect(output).toContain('Active');
     expect(output).toContain('Pending');
   });
+
+  it('round-trip: export default function', async () => {
+    const source = `export default function greet(name: string): string {
+  return 'hello ' + name;
+}
+`;
+    await ingester.ingestSource(source, 'default-fn/test', typescriptPlugin);
+    const output = await materializer.materialize('default-fn/test', typescriptPlugin);
+
+    expect(output).toContain('export default function greet(name: string): string');
+    expect(output).not.toMatch(/^export function greet/m);
+  });
+
+  it('round-trip: export default class', async () => {
+    const source = `export default class MyService {
+  run(): void {
+    console.log('running');
+  }
+}
+`;
+    await ingester.ingestSource(source, 'default-class/test', typescriptPlugin);
+    const output = await materializer.materialize('default-class/test', typescriptPlugin);
+
+    expect(output).toContain('export default class MyService');
+    expect(output).not.toMatch(/^export class MyService/m);
+  });
+
+  it('round-trip: re-export statements', async () => {
+    const source = `export function foo(): void {}
+
+export { foo as bar };
+`;
+    await ingester.ingestSource(source, 'reexport/test', typescriptPlugin);
+    const output = await materializer.materialize('reexport/test', typescriptPlugin);
+
+    expect(output).toContain('export { foo as bar }');
+  });
+
+  it('round-trip: re-export from module', async () => {
+    const source = `export { Foo as Bar } from './module';
+export type { MyType } from './types';
+`;
+    await ingester.ingestSource(source, 'reexport-from/test', typescriptPlugin);
+    const output = await materializer.materialize('reexport-from/test', typescriptPlugin);
+
+    expect(output).toContain("export { Foo as Bar } from './module'");
+    expect(output).toContain("export type { MyType } from './types'");
+  });
+
+  it('round-trip: named re-export without alias', async () => {
+    const source = `export { Foo, Bar } from './stuff';
+`;
+    await ingester.ingestSource(source, 'reexport-named/test', typescriptPlugin);
+    const output = await materializer.materialize('reexport-named/test', typescriptPlugin);
+
+    expect(output).toContain("export { Foo, Bar } from './stuff'");
+  });
 });
