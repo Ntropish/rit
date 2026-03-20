@@ -257,3 +257,110 @@ describe('ProllyTree — structural sharing under path-copy', () => {
     expect(decVal((await tree.get(key('k0250')))!)).toBe('MODIFIED');
   });
 });
+
+describe('ProllyTree — subtree-pruned diff', () => {
+  it('diff of 10k-entry trees with 5 changes returns exactly 5 entries', async () => {
+    const store = new MemoryStore();
+    let treeA = new ProllyTree(store);
+
+    // Build tree with 10,000 entries
+    const entries = [];
+    for (let i = 0; i < 10000; i++) {
+      entries.push({ key: key(`k${String(i).padStart(5, '0')}`), value: val(`v${i}`) });
+    }
+    entries.sort((a, b) => compareBytes(a.key, b.key));
+    treeA = await treeA.buildFromSorted(entries);
+
+    // Create treeB with 5 modifications spread across the key space
+    let treeB = treeA;
+    treeB = await treeB.put(key('k00100'), val('CHANGED_0'));
+    treeB = await treeB.put(key('k02500'), val('CHANGED_1'));
+    treeB = await treeB.put(key('k05000'), val('CHANGED_2'));
+    treeB = await treeB.put(key('k07500'), val('CHANGED_3'));
+    treeB = await treeB.put(key('k09900'), val('CHANGED_4'));
+
+    const diffs: Array<{ type: string; key: string }> = [];
+    for await (const d of treeA.diff(treeB)) {
+      diffs.push({ type: d.type, key: dec.decode(d.key) });
+    }
+
+    expect(diffs).toHaveLength(5);
+    expect(diffs.every(d => d.type === 'modified')).toBe(true);
+    expect(diffs.map(d => d.key).sort()).toEqual([
+      'k00100', 'k02500', 'k05000', 'k07500', 'k09900',
+    ]);
+  });
+
+  it('subtree pruning reads far fewer nodes than full scan', async () => {
+    // Build two 10k-entry trees with 5 diffs, count store.get() calls
+    const baseStore = new MemoryStore();
+    let treeA = new ProllyTree(baseStore);
+
+    const entries = [];
+    for (let i = 0; i < 10000; i++) {
+      entries.push({ key: key(`k${String(i).padStart(5, '0')}`), value: val(`v${i}`) });
+    }
+    entries.sort((a, b) => compareBytes(a.key, b.key));
+    treeA = await treeA.buildFromSorted(entries);
+
+    let treeB = treeA;
+    treeB = await treeB.put(key('k00100'), val('X'));
+    treeB = await treeB.put(key('k05000'), val('X'));
+    treeB = await treeB.put(key('k09900'), val('X'));
+
+    // Wrap the store with a counting proxy
+    let getCount = 0;
+    const countingStore: any = {
+      get: async (hash: string) => { getCount++; return baseStore.get(hash); },
+      put: async (hash: string, data: Uint8Array) => baseStore.put(hash, data),
+      has: async (hash: string) => baseStore.has(hash),
+      putBatch: async (entries: any) => baseStore.putBatch(entries),
+      hashes: () => baseStore.hashes(),
+    };
+
+    // Re-create trees using counting store
+    const cTreeA = new ProllyTree(countingStore, treeA.rootHash);
+    const cTreeB = new ProllyTree(countingStore, treeB.rootHash);
+
+    const diffs: any[] = [];
+    for await (const d of cTreeA.diff(cTreeB)) {
+      diffs.push(d);
+    }
+
+    expect(diffs).toHaveLength(3);
+    // With subtree pruning, we should read far fewer nodes than the total.
+    // 10k entries / 32 target chunk = ~312 leaf chunks + internal nodes ≈ 330 total nodes.
+    // Old approach: collectAll reads all ~330 nodes × 2 trees = ~660 gets.
+    // Pruned approach: only reads nodes along paths to differing keys.
+    expect(getCount).toBeLessThan(100);
+  });
+
+  it('diff with added and removed entries works correctly', async () => {
+    const store = new MemoryStore();
+    let treeA = new ProllyTree(store);
+
+    const entries = [];
+    for (let i = 0; i < 1000; i++) {
+      entries.push({ key: key(`k${String(i).padStart(4, '0')}`), value: val(`v${i}`) });
+    }
+    entries.sort((a, b) => compareBytes(a.key, b.key));
+    treeA = await treeA.buildFromSorted(entries);
+
+    // treeB: remove 2 keys, add 1 new key
+    let treeB = treeA;
+    treeB = await treeB.delete(key('k0100'));
+    treeB = await treeB.delete(key('k0500'));
+    treeB = await treeB.put(key('k1001'), val('new'));
+
+    const diffs: Array<{ type: string; key: string }> = [];
+    for await (const d of treeA.diff(treeB)) {
+      diffs.push({ type: d.type, key: dec.decode(d.key) });
+    }
+
+    const removed = diffs.filter(d => d.type === 'removed');
+    const added = diffs.filter(d => d.type === 'added');
+
+    expect(removed.map(d => d.key).sort()).toEqual(['k0100', 'k0500']);
+    expect(added.map(d => d.key)).toEqual(['k1001']);
+  });
+});

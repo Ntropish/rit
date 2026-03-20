@@ -534,24 +534,128 @@ async function* diffTrees(
   storeB: Store, hashB: Hash | null,
   hashLength: number,
 ): AsyncIterable<DiffEntry> {
+  yield* diffNodes(storeA, hashA, storeB, hashB, hashLength);
+}
+
+async function* diffNodes(
+  storeA: Store, hashA: Hash | null,
+  storeB: Store, hashB: Hash | null,
+  hashLen: number,
+): AsyncIterable<DiffEntry> {
+  // Subtree pruning: identical hashes mean identical data
   if (hashA === hashB) return;
+
   if (!hashA) {
-    const treeB = new ProllyTree(storeB, hashB);
-    for await (const entry of treeB.entries()) {
-      yield { type: 'added', key: entry.key, right: entry.value };
-    }
+    yield* emitAllEntries(storeB, hashB!, hashLen, 'added');
     return;
   }
   if (!hashB) {
-    const treeA = new ProllyTree(storeA, hashA);
-    for await (const entry of treeA.entries()) {
-      yield { type: 'removed', key: entry.key, left: entry.value };
-    }
+    yield* emitAllEntries(storeA, hashA, hashLen, 'removed');
     return;
   }
 
-  const entriesA = await collectAll(storeA, hashA);
-  const entriesB = await collectAll(storeB, hashB);
+  const nodeA = await loadNode(storeA, hashA, hashLen);
+  const nodeB = await loadNode(storeB, hashB, hashLen);
+
+  if (nodeA.type === NODE_TYPE_LEAF && nodeB.type === NODE_TYPE_LEAF) {
+    yield* diffLeafEntries(nodeA.entries, nodeB.entries);
+    return;
+  }
+
+  if (nodeA.type === NODE_TYPE_INTERNAL && nodeB.type === NODE_TYPE_INTERNAL) {
+    yield* diffInternalNodes(storeA, nodeA, storeB, nodeB, hashLen);
+    return;
+  }
+
+  // Mixed: one leaf, one internal. Collect leaves from both and merge-walk.
+  const entriesA = await collectNodeLeaves(storeA, hashA, hashLen);
+  const entriesB = await collectNodeLeaves(storeB, hashB, hashLen);
+  yield* diffLeafEntries(entriesA, entriesB);
+}
+
+async function* diffInternalNodes(
+  storeA: Store, nodeA: InternalNode,
+  storeB: Store, nodeB: InternalNode,
+  hashLen: number,
+): AsyncIterable<DiffEntry> {
+  const cA = nodeA.entries;
+  const cB = nodeB.entries;
+  let i = 0, j = 0;
+
+  while (i < cA.length && j < cB.length) {
+    const cmp = compareBytes(cA[i].key, cB[j].key);
+
+    if (cmp === 0) {
+      // Aligned boundaries: recurse (hash check at top of diffNodes)
+      yield* diffNodes(
+        storeA, bytesToHex(cA[i].childHash),
+        storeB, bytesToHex(cB[j].childHash),
+        hashLen,
+      );
+      i++; j++;
+    } else {
+      // Misaligned boundaries: collect children until realignment,
+      // then diff their leaf entries.
+      const aHashes: Hash[] = [];
+      const bHashes: Hash[] = [];
+
+      while (i < cA.length && j < cB.length) {
+        const c = compareBytes(cA[i].key, cB[j].key);
+        if (c === 0) {
+          aHashes.push(bytesToHex(cA[i].childHash));
+          bHashes.push(bytesToHex(cB[j].childHash));
+          i++; j++;
+          break;
+        } else if (c < 0) {
+          aHashes.push(bytesToHex(cA[i].childHash));
+          i++;
+        } else {
+          bHashes.push(bytesToHex(cB[j].childHash));
+          j++;
+        }
+      }
+
+      // If one side ran out before realignment, collect remaining from the other
+      if (i >= cA.length) {
+        while (j < cB.length) {
+          bHashes.push(bytesToHex(cB[j].childHash));
+          j++;
+        }
+      } else if (j >= cB.length) {
+        while (i < cA.length) {
+          aHashes.push(bytesToHex(cA[i].childHash));
+          i++;
+        }
+      }
+
+      const entriesA: LeafEntry[] = [];
+      for (const h of aHashes) {
+        const leaves = await collectNodeLeaves(storeA, h, hashLen);
+        entriesA.push(...leaves);
+      }
+      const entriesB: LeafEntry[] = [];
+      for (const h of bHashes) {
+        const leaves = await collectNodeLeaves(storeB, h, hashLen);
+        entriesB.push(...leaves);
+      }
+      yield* diffLeafEntries(entriesA, entriesB);
+    }
+  }
+
+  // Remaining children on one side only
+  while (i < cA.length) {
+    yield* emitAllEntries(storeA, bytesToHex(cA[i].childHash), hashLen, 'removed');
+    i++;
+  }
+  while (j < cB.length) {
+    yield* emitAllEntries(storeB, bytesToHex(cB[j].childHash), hashLen, 'added');
+    j++;
+  }
+}
+
+async function* diffLeafEntries(
+  entriesA: LeafEntry[], entriesB: LeafEntry[],
+): AsyncIterable<DiffEntry> {
   let ia = 0, ib = 0;
   while (ia < entriesA.length && ib < entriesB.length) {
     const cmp = compareBytes(entriesA[ia].key, entriesB[ib].key);
@@ -578,11 +682,37 @@ async function* diffTrees(
   }
 }
 
-async function collectAll(store: Store, hash: Hash) {
-  const tree = new ProllyTree(store, hash);
-  const r: Array<{ key: Uint8Array; value: Uint8Array }> = [];
-  for await (const e of tree.entries()) r.push(e);
-  return r;
+async function* emitAllEntries(
+  store: Store, hash: Hash, hashLen: number,
+  type: 'added' | 'removed',
+): AsyncIterable<DiffEntry> {
+  const node = await loadNode(store, hash, hashLen);
+  if (node.type === NODE_TYPE_LEAF) {
+    for (const entry of node.entries) {
+      if (type === 'added') {
+        yield { type: 'added', key: entry.key, right: entry.value };
+      } else {
+        yield { type: 'removed', key: entry.key, left: entry.value };
+      }
+    }
+  } else {
+    for (const entry of node.entries) {
+      yield* emitAllEntries(store, bytesToHex(entry.childHash), hashLen, type);
+    }
+  }
+}
+
+async function collectNodeLeaves(
+  store: Store, hash: Hash, hashLen: number,
+): Promise<LeafEntry[]> {
+  const node = await loadNode(store, hash, hashLen);
+  if (node.type === NODE_TYPE_LEAF) return node.entries;
+  const result: LeafEntry[] = [];
+  for (const entry of node.entries) {
+    const leaves = await collectNodeLeaves(store, bytesToHex(entry.childHash), hashLen);
+    result.push(...leaves);
+  }
+  return result;
 }
 
 function mergeSorted(
