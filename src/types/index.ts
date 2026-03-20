@@ -10,13 +10,13 @@ import {
 // ── Type tags ─────────────────────────────────────────────────
 // These go into the composite key to namespace sub-keys by type.
 
-const TYPE_STRING    = 0x10;
-const TYPE_HASH      = 0x20;
-const TYPE_LIST_META = 0x30;
-const TYPE_LIST_ITEM = 0x31;
-const TYPE_SET       = 0x40;
-const TYPE_ZSET_MEMBER = 0x50; // key → score lookup
-const TYPE_ZSET_SCORE  = 0x51; // score-ordered index
+export const TYPE_STRING    = 0x10;
+export const TYPE_HASH      = 0x20;
+export const TYPE_LIST_META = 0x30;
+export const TYPE_LIST_ITEM = 0x31;
+export const TYPE_SET       = 0x40;
+export const TYPE_ZSET_MEMBER = 0x50; // key → score lookup
+export const TYPE_ZSET_SCORE  = 0x51; // score-ordered index
 
 const TEXT_ENCODER = new TextEncoder();
 const TEXT_DECODER = new TextDecoder();
@@ -31,11 +31,11 @@ function hashFieldKey(key: string, field: string): Uint8Array {
   return compositeKey(encodeOrderedString(key), encodeUint8(TYPE_HASH), encodeOrderedString(field));
 }
 
-function listMetaKey(key: string): Uint8Array {
+export function listMetaKey(key: string): Uint8Array {
   return compositeKey(encodeOrderedString(key), encodeUint8(TYPE_LIST_META));
 }
 
-function listItemKey(key: string, index: number): Uint8Array {
+export function listItemKey(key: string, index: number): Uint8Array {
   return compositeKey(encodeOrderedString(key), encodeUint8(TYPE_LIST_ITEM), encodeOrderedFloat64(index));
 }
 

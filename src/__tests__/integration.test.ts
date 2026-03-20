@@ -430,6 +430,174 @@ describe('Repository — redis+git integration', () => {
       expect(result.conflicts).toHaveLength(0);
       expect(await repo.data().get('x')).toBe('same_value');
     });
+
+    // ── Type-aware merge strategies ──────────────────────
+
+    it('concurrent RPUSH: concatenates ours then theirs', async () => {
+      let db = repo.data();
+      db = await db.rpush('q', 'a', 'b');
+      await repo.commit('initial', db);
+
+      await repo.branch('feature');
+      await repo.checkout('feature');
+      db = repo.data();
+      db = await db.rpush('q', 'c', 'd');
+      await repo.commit('feature rpush', db);
+
+      await repo.checkout('main');
+      db = repo.data();
+      db = await db.rpush('q', 'e', 'f');
+      await repo.commit('main rpush', db);
+
+      const result = await repo.merge('feature');
+      expect(result.conflicts).toHaveLength(0);
+
+      db = repo.data();
+      const items = await db.lrange('q', 0, -1);
+      // ours (e,f) then theirs (c,d)
+      expect(items).toEqual(['a', 'b', 'e', 'f', 'c', 'd']);
+    });
+
+    it('concurrent LPUSH: concatenates theirs then ours', async () => {
+      let db = repo.data();
+      db = await db.rpush('q', 'c', 'd');
+      await repo.commit('initial', db);
+
+      await repo.branch('feature');
+      await repo.checkout('feature');
+      db = repo.data();
+      db = await db.lpush('q', 'b', 'a');
+      await repo.commit('feature lpush', db);
+
+      await repo.checkout('main');
+      db = repo.data();
+      db = await db.lpush('q', 'z', 'y');
+      await repo.commit('main lpush', db);
+
+      const result = await repo.merge('feature');
+      expect(result.conflicts).toHaveLength(0);
+
+      db = repo.data();
+      const items = await db.lrange('q', 0, -1);
+      // theirs (a,b) then ours (y,z) then base (c,d)
+      expect(items).toEqual(['a', 'b', 'y', 'z', 'c', 'd']);
+    });
+
+    it('concurrent RPUSH + LPUSH: clean merge, no overlap', async () => {
+      let db = repo.data();
+      db = await db.rpush('q', 'b');
+      await repo.commit('initial', db);
+
+      await repo.branch('feature');
+      await repo.checkout('feature');
+      db = repo.data();
+      db = await db.lpush('q', 'a');
+      await repo.commit('feature lpush', db);
+
+      await repo.checkout('main');
+      db = repo.data();
+      db = await db.rpush('q', 'c');
+      await repo.commit('main rpush', db);
+
+      const result = await repo.merge('feature');
+      expect(result.conflicts).toHaveLength(0);
+
+      db = repo.data();
+      const items = await db.lrange('q', 0, -1);
+      expect(items).toEqual(['a', 'b', 'c']);
+    });
+
+    it('concurrent SADD same member: no conflict', async () => {
+      let db = repo.data();
+      db = await db.sadd('s', 'a');
+      await repo.commit('initial', db);
+
+      await repo.branch('feature');
+      await repo.checkout('feature');
+      db = repo.data();
+      db = await db.sadd('s', 'b');
+      await repo.commit('feature sadd', db);
+
+      await repo.checkout('main');
+      db = repo.data();
+      db = await db.sadd('s', 'b');
+      await repo.commit('main sadd', db);
+
+      const result = await repo.merge('feature');
+      expect(result.conflicts).toHaveLength(0);
+
+      db = repo.data();
+      const members = await db.smembers('s');
+      expect(members.sort()).toEqual(['a', 'b']);
+    });
+
+    it('concurrent ZADD different members: clean merge', async () => {
+      let db = repo.data();
+      db = await db.zadd('lb', 10, 'alice');
+      await repo.commit('initial', db);
+
+      await repo.branch('feature');
+      await repo.checkout('feature');
+      db = repo.data();
+      db = await db.zadd('lb', 20, 'bob');
+      await repo.commit('feature zadd', db);
+
+      await repo.checkout('main');
+      db = repo.data();
+      db = await db.zadd('lb', 30, 'charlie');
+      await repo.commit('main zadd', db);
+
+      const result = await repo.merge('feature');
+      expect(result.conflicts).toHaveLength(0);
+
+      db = repo.data();
+      const range = await db.zrange('lb', 0, -1);
+      expect(range).toEqual([
+        { member: 'alice', score: 10 },
+        { member: 'bob', score: 20 },
+        { member: 'charlie', score: 30 },
+      ]);
+    });
+
+    it('concurrent ZADD same member different scores: conflict', async () => {
+      let db = repo.data();
+      db = await db.zadd('lb', 10, 'alice');
+      await repo.commit('initial', db);
+
+      await repo.branch('feature');
+      await repo.checkout('feature');
+      db = repo.data();
+      db = await db.zadd('lb', 50, 'alice');
+      await repo.commit('feature score', db);
+
+      await repo.checkout('main');
+      db = repo.data();
+      db = await db.zadd('lb', 99, 'alice');
+      await repo.commit('main score', db);
+
+      const result = await repo.merge('feature');
+      expect(result.conflicts.length).toBeGreaterThan(0);
+    });
+
+    it('delete vs modify on different types: conflict', async () => {
+      let db = repo.data();
+      db = await db.set('x', 'val');
+      await repo.commit('initial', db);
+
+      await repo.branch('feature');
+      await repo.checkout('feature');
+      db = repo.data();
+      db = await db.set('x', 'updated');
+      await repo.commit('feature modify', db);
+
+      await repo.checkout('main');
+      db = repo.data();
+      db = await db.del('x');
+      await repo.commit('main delete', db);
+
+      const result = await repo.merge('feature');
+      expect(result.conflicts.length).toBeGreaterThan(0);
+    });
   });
 
   // ── Snapshot / time travel ──────────────────────────────
