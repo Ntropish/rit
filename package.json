@@ -1,5 +1,5 @@
 {
-  "name": "rgit",
+  "name": "rit",
   "version": "0.0.1",
   "description": "Redis + Git: versioned key-value store built on prolly trees",
   "type": "module",
