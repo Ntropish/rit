@@ -50,8 +50,7 @@ DEL user:name
 Groups of field-value pairs under one key.
 
 ```
-HSET server host localhost
-HSET server port 5432
+HSET server host localhost port 5432
 HGETALL server
 → host: localhost
 → port: 5432
@@ -215,8 +214,7 @@ A typical workflow:
 rit project.rit
 
 # Add some data
-HSET config db_host localhost
-HSET config db_port 5432
+HSET config db_host localhost db_port 5432
 COMMIT "Default config"
 
 # Branch for production

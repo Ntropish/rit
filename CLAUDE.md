@@ -48,9 +48,11 @@ The system is layered bottom-up:
 
 ## Examples
 
+Each example is a `.rit` file built via the CLI, demonstrating branching and clean merges:
+
 - **`examples/config-manager/`** — Versioned configuration management with environment branches
-- **`examples/schema-tracker/`** — Database schema evolution tracking
-- **`examples/code-store/`** — TypeScript AST-level code storage
+- **`examples/schema-tracker/`** — Database schema evolution tracking (tables, columns, indexes)
+- **`examples/code-store/`** — Code storage with modules, functions, and types
 
 ## Key Design Patterns
 

@@ -50,7 +50,8 @@ SADD tags redis git versioning
 SMEMBERS tags
 → git, redis, versioning
 
-ZADD leaderboard 100 alice 250 bob
+ZADD leaderboard 100 alice
+ZADD leaderboard 250 bob
 ZRANGE leaderboard 0 -1
 → alice (100), bob (250)
 

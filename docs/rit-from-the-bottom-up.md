@@ -95,14 +95,19 @@ The commit object itself is also content-addressed. It's just another block in t
 
 The store is immutable and content-addressed. You still need mutable pointers, a way to know which commit is "current."
 
-That's what **refs** are. A ref is a named pointer to a commit hash:
+That's what **refs** are. A ref is a named pointer to a hash:
 
 | name | hash |
 |------|------|
+| `HEAD` | `main` |
 | `refs/heads/main` | `d4e5f6...` |
 | `refs/heads/staging` | `7a8b9c...` |
+| `refs/working/main` | `a1b2c3...` |
+| `refs/working/staging` | `e8f9a0...` |
 
-A branch is just a ref. When you commit, rit updates the ref to point to the new commit. When you checkout a branch, rit reads the ref, loads that commit's tree, and makes it your working state.
+Branch refs (`refs/heads/`) point to commits. Working refs (`refs/working/`) point to the current working tree root for each branch — this is how uncommitted changes survive between sessions. `HEAD` tracks which branch is active.
+
+When you commit, rit updates the branch ref to point to the new commit. When you checkout a branch, rit loads that branch's working tree (or the commit tree if there are no uncommitted changes).
 
 This is the complete mutable state in rit: a table of names to hashes. Everything else is immutable.
 
@@ -112,9 +117,9 @@ With this understood, branches are straightforward.
 
 `BRANCH staging` creates a new ref pointing to the same commit as your current branch. One row in the refs table.
 
-`CHECKOUT staging` reads the ref, follows it to a commit, loads that commit's tree as your working data.
+`CHECKOUT staging` saves the current branch's working state, then loads the target branch's working tree. Uncommitted changes are preserved per-branch — switch away and come back, your changes are still there.
 
-Because trees use structural sharing, a new branch costs almost nothing. Both branches point to the same commit, which points to the same tree, which is the same blocks. Branches only diverge when you start making changes and committing on one of them.
+Because trees use structural sharing, a new branch costs almost nothing. Both branches point to the same commit, which points to the same tree, which is the same blocks. Branches only diverge when you start making changes.
 
 ## 8. Merge
 
@@ -152,10 +157,10 @@ Now look at the commands again:
 | Command | What it actually does |
 |---------|----------------------|
 | `SET k v` | Insert entry `[k, STRING] → v` into the working tree |
-| `HSET k f v` | Insert entry `[k, HASH, f] → v` into the working tree |
+| `HSET k f v [f v ...]` | Insert entry `[k, HASH, f] → v` into the working tree (multiple pairs allowed) |
 | `COMMIT "msg"` | Store the working tree root as a new commit, update the current ref |
 | `BRANCH name` | Copy the current ref to a new name |
-| `CHECKOUT name` | Load the tree from the commit that `name` points to |
+| `CHECKOUT name` | Save working state, load `name`'s working tree (or commit tree) |
 | `MERGE name` | Three-way diff, apply non-conflicting changes, create two-parent commit |
 | `LOG` | Walk parent pointers from the current commit |
 | `DIFF` | Structural diff between working tree and last commit's tree |
