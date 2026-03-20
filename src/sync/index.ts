@@ -12,6 +12,8 @@ export type { RefAdvertisement, BranchSync, SyncPlan } from './negotiation.js';
 export { createTransportPair, encodeBlockData, decodeBlockData } from './transport.js';
 export type { SyncTransport, SyncMessage, RefAdvertiseMessage, BlockRequestMessage, BlockResponseMessage, PushMessage, PushAckMessage, PullRequestMessage, PullResponseMessage, BranchUpdatedMessage } from './transport.js';
 export { RemoteSyncServer, RemoteSyncClient } from './protocol.js';
+export { WebSocketClientTransport } from './ws-client.js';
+export { RemoteRepository } from './remote-repo.js';
 
 // ── Types ─────────────────────────────────────────────────────
 

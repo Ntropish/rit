@@ -28,6 +28,7 @@ export {
   clone, push, pull,
   createTransportPair, encodeBlockData, decodeBlockData,
   RemoteSyncServer, RemoteSyncClient,
+  WebSocketClientTransport, RemoteRepository,
 } from './sync/index.js';
 export type {
   RefAdvertisement, BranchSync, SyncPlan, SyncPeer, PushResult, PullResult,
