@@ -1,0 +1,21 @@
+{
+  "name": "@rit/sync",
+  "version": "0.0.1",
+  "description": "File-to-store synchronization layer for rit",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "rgit": "file:../../",
+    "@rit/schema": "file:../rit-schema",
+    "ts-morph": "^24.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
+  }
+}
