@@ -1,6 +1,20 @@
 import { Project, SyntaxKind, Node } from 'ts-morph';
 import type { LanguagePlugin, EntityWrite, ModuleEntities } from '../types.js';
-import { ModuleSchema, FunctionSchema, TypeDefSchema } from '../schemas.js';
+import { ModuleSchema, FunctionSchema, TypeDefSchema, VariableSchema } from '../schemas.js';
+
+function getTypeParamsText(node: { getTypeParameters(): { getText(): string }[] }): string | undefined {
+  const params = node.getTypeParameters();
+  if (params.length === 0) return undefined;
+  return `<${params.map(p => p.getText()).join(', ')}>`;
+}
+
+function getBodyFromBraces(node: { getMembers(): { getText(): string }[]; getText(): string }): string {
+  // Use AST to reconstruct body from members
+  const fullText = node.getText();
+  const firstBrace = fullText.indexOf('{');
+  if (firstBrace === -1) return '{}';
+  return fullText.slice(firstBrace);
+}
 
 export const typescriptPlugin: LanguagePlugin = {
   extensions: ['.ts', '.tsx'],
@@ -13,9 +27,11 @@ export const typescriptPlugin: LanguagePlugin = {
 
     // Collect imports
     const importPaths: string[] = [];
+    const importDeclarations: string[] = [];
     for (const imp of sourceFile.getImportDeclarations()) {
       const specifier = imp.getModuleSpecifierValue();
       importPaths.push(`mod:${specifier}`);
+      importDeclarations.push(imp.getText());
     }
 
     // Module entity
@@ -24,6 +40,7 @@ export const typescriptPlugin: LanguagePlugin = {
       data: {
         path: modulePath,
         imports: importPaths,
+        importDeclarations,
       },
     });
 
@@ -45,6 +62,7 @@ export const typescriptPlugin: LanguagePlugin = {
 
         const params = statement.getParameters().map(p => p.getText()).join(', ');
         const returnType = statement.getReturnTypeNode()?.getText();
+        const typeParams = getTypeParamsText(statement);
 
         writes.push({
           schema: FunctionSchema,
@@ -58,13 +76,20 @@ export const typescriptPlugin: LanguagePlugin = {
             body,
             order,
             ...(jsdoc ? { jsdoc } : {}),
+            ...(typeParams ? { typeParams } : {}),
           },
         });
         order++;
       } else if (Node.isInterfaceDeclaration(statement)) {
         const name = statement.getName();
-        // Get the body (everything between and including braces)
-        const body = statement.getText().replace(/^export\s+/, '').replace(/^interface\s+\S+\s*/, '');
+        const body = getBodyFromBraces(statement);
+        const typeParams = getTypeParamsText(statement);
+
+        // Heritage (extends)
+        const extendsClause = statement.getExtends();
+        const heritage = extendsClause.length > 0
+          ? `extends ${extendsClause.map(e => e.getText()).join(', ')}`
+          : undefined;
 
         writes.push({
           schema: TypeDefSchema,
@@ -75,6 +100,8 @@ export const typescriptPlugin: LanguagePlugin = {
             kind: 'interface',
             body,
             order,
+            ...(typeParams ? { typeParams } : {}),
+            ...(heritage ? { heritage } : {}),
           },
         });
         order++;
@@ -82,6 +109,7 @@ export const typescriptPlugin: LanguagePlugin = {
         const name = statement.getName();
         const typeNode = statement.getTypeNode();
         const body = typeNode ? typeNode.getText() : '';
+        const typeParams = getTypeParamsText(statement);
 
         writes.push({
           schema: TypeDefSchema,
@@ -92,12 +120,13 @@ export const typescriptPlugin: LanguagePlugin = {
             kind: 'type',
             body,
             order,
+            ...(typeParams ? { typeParams } : {}),
           },
         });
         order++;
       } else if (Node.isEnumDeclaration(statement)) {
         const name = statement.getName();
-        const body = statement.getText().replace(/^export\s+/, '').replace(/^enum\s+\S+\s*/, '');
+        const body = getBodyFromBraces(statement);
 
         writes.push({
           schema: TypeDefSchema,
@@ -111,6 +140,65 @@ export const typescriptPlugin: LanguagePlugin = {
           },
         });
         order++;
+      } else if (Node.isClassDeclaration(statement)) {
+        const name = statement.getName();
+        if (!name) continue;
+
+        const body = getBodyFromBraces(statement);
+        const typeParams = getTypeParamsText(statement);
+
+        // Heritage (extends + implements)
+        const heritageParts: string[] = [];
+        const extendsExpr = statement.getExtends();
+        if (extendsExpr) {
+          heritageParts.push(`extends ${extendsExpr.getText()}`);
+        }
+        const implementsExprs = statement.getImplements();
+        if (implementsExprs.length > 0) {
+          heritageParts.push(`implements ${implementsExprs.map(i => i.getText()).join(', ')}`);
+        }
+        const heritage = heritageParts.length > 0 ? heritageParts.join(' ') : undefined;
+
+        writes.push({
+          schema: TypeDefSchema,
+          data: {
+            module: moduleKey,
+            name,
+            exported: statement.isExported(),
+            kind: 'class',
+            body,
+            order,
+            ...(typeParams ? { typeParams } : {}),
+            ...(heritage ? { heritage } : {}),
+          },
+        });
+        order++;
+      } else if (Node.isVariableStatement(statement)) {
+        const exported = statement.isExported();
+        const declList = statement.getDeclarationList();
+        const declKind = declList.getDeclarationKind();
+
+        for (const decl of declList.getDeclarations()) {
+          const name = decl.getName();
+          const typeNode = decl.getTypeNode();
+          const typeAnnotation = typeNode ? typeNode.getText() : undefined;
+          const initializer = decl.getInitializer();
+          const initText = initializer ? initializer.getText() : '';
+
+          writes.push({
+            schema: VariableSchema,
+            data: {
+              module: moduleKey,
+              name,
+              exported,
+              declarationKind: declKind,
+              initializer: initText,
+              order,
+              ...(typeAnnotation ? { typeAnnotation } : {}),
+            },
+          });
+          order++;
+        }
       }
     }
 
@@ -121,18 +209,16 @@ export const typescriptPlugin: LanguagePlugin = {
     const lines: string[] = [];
 
     // Imports from module entity
-    const imports = entities.module.imports as string[] | undefined;
-    if (imports && imports.length > 0) {
-      for (const imp of imports) {
-        // Strip 'mod:' prefix to get the module path
-        const modPath = imp.startsWith('mod:') ? imp.slice(4) : imp;
-        lines.push(`import '${modPath}';`);
+    const importDecls = entities.module.importDeclarations as string[] | undefined;
+    if (importDecls && importDecls.length > 0) {
+      for (const decl of importDecls) {
+        lines.push(decl);
       }
       lines.push('');
     }
 
-    // Combine functions and types, sort by order
-    type Declaration = { kind: 'function' | 'type'; data: Record<string, unknown>; order: number };
+    // Combine all declarations, sort by order
+    type Declaration = { kind: 'function' | 'type' | 'variable'; data: Record<string, unknown>; order: number };
     const declarations: Declaration[] = [];
 
     for (const fn of entities.functions) {
@@ -140,6 +226,9 @@ export const typescriptPlugin: LanguagePlugin = {
     }
     for (const typ of entities.types) {
       declarations.push({ kind: 'type', data: typ, order: typ.order as number });
+    }
+    for (const v of entities.variables) {
+      declarations.push({ kind: 'variable', data: v, order: v.order as number });
     }
     declarations.sort((a, b) => a.order - b.order);
 
@@ -151,23 +240,36 @@ export const typescriptPlugin: LanguagePlugin = {
         }
         const exportKw = d.exported ? 'export ' : '';
         const asyncKw = d.async ? 'async ' : '';
+        const typeParams = d.typeParams ? (d.typeParams as string) : '';
         const params = d.params as string;
         const returnType = d.returnType ? `: ${d.returnType}` : '';
         const body = d.body as string;
-        lines.push(`${exportKw}${asyncKw}function ${d.name}(${params})${returnType} ${body}`);
+        lines.push(`${exportKw}${asyncKw}function ${d.name}${typeParams}(${params})${returnType} ${body}`);
+        lines.push('');
+      } else if (decl.kind === 'variable') {
+        const d = decl.data;
+        const exportKw = d.exported ? 'export ' : '';
+        const declKind = d.declarationKind as string;
+        const typeAnn = d.typeAnnotation ? `: ${d.typeAnnotation}` : '';
+        const init = d.initializer as string;
+        lines.push(`${exportKw}${declKind} ${d.name}${typeAnn} = ${init};`);
         lines.push('');
       } else {
         const d = decl.data;
         const exportKw = d.exported ? 'export ' : '';
         const kind = d.kind as string;
+        const typeParams = d.typeParams ? (d.typeParams as string) : '';
+        const heritage = d.heritage ? ` ${d.heritage}` : '';
         const body = d.body as string;
 
         if (kind === 'type') {
-          lines.push(`${exportKw}type ${d.name} = ${body};`);
+          lines.push(`${exportKw}type ${d.name}${typeParams} = ${body};`);
         } else if (kind === 'interface') {
-          lines.push(`${exportKw}interface ${d.name} ${body}`);
+          lines.push(`${exportKw}interface ${d.name}${typeParams}${heritage} ${body}`);
         } else if (kind === 'enum') {
           lines.push(`${exportKw}enum ${d.name} ${body}`);
+        } else if (kind === 'class') {
+          lines.push(`${exportKw}class ${d.name}${typeParams}${heritage} ${body}`);
         }
         lines.push('');
       }

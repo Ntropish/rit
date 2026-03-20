@@ -9,6 +9,7 @@ export interface ModuleEntities {
   module: Record<string, unknown>;
   functions: Record<string, unknown>[];
   types: Record<string, unknown>[];
+  variables: Record<string, unknown>[];
 }
 
 export interface LanguagePlugin {

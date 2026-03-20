@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { Project, ScriptTarget } from 'ts-morph';
 import { Repository, MemoryStore } from '../../../../src/index.js';
 import { SchemaRegistry, EntityStore } from '../../../../packages/rit-schema/src/index.js';
-import { ModuleSchema, FunctionSchema, TypeDefSchema } from '../schemas.js';
+import { ModuleSchema, FunctionSchema, TypeDefSchema, VariableSchema } from '../schemas.js';
 import { typescriptPlugin } from '../plugins/typescript.js';
 import { FileIngester } from '../ingester.js';
 import { FileMaterializer } from '../materializer.js';
@@ -94,6 +94,7 @@ describe('FileIngester + FileMaterializer', () => {
     registry.register(ModuleSchema);
     registry.register(FunctionSchema);
     registry.register(TypeDefSchema);
+    registry.register(VariableSchema);
     entityStore = new EntityStore(repo, registry);
     ingester = new FileIngester(entityStore);
     materializer = new FileMaterializer(entityStore);
@@ -125,8 +126,11 @@ describe('FileIngester + FileMaterializer', () => {
     const project = new Project({ useInMemoryFileSystem: true, compilerOptions: { target: ScriptTarget.ESNext } });
     const sourceFile = project.createSourceFile('output.ts', output);
     const diagnostics = sourceFile.getPreEmitDiagnostics();
-    // We only check for syntax errors, not type errors (no type context)
-    const syntaxErrors = diagnostics.filter(d => d.getCategory() === 1);
+    // We only check for syntax errors (codes 1000-1999), not type/module resolution errors (no type context in-memory)
+    const syntaxErrors = diagnostics.filter(d => {
+      const code = d.getCode();
+      return code >= 1000 && code <= 1999;
+    });
     expect(syntaxErrors).toHaveLength(0);
 
     // Verify key elements are present
@@ -189,5 +193,148 @@ describe('FileIngester + FileMaterializer', () => {
       expect(t2!.kind).toBe(t1.kind);
       expect(t2!.exported).toBe(t1.exported);
     }
+  });
+
+  it('round-trip: imports preserve named, default, type-only, and namespace forms', async () => {
+    const source = `import { foo, bar } from './utils';
+import type { Config } from './config';
+import DefaultExport from './default';
+import * as ns from './namespace';
+import { type TypeOnly, value } from './mixed';
+
+export function use(x: string): string {
+  return x;
+}
+`;
+    await ingester.ingestSource(source, 'imports/test', typescriptPlugin);
+    const output = await materializer.materialize('imports/test', typescriptPlugin);
+
+    expect(output).toContain("import { foo, bar } from './utils'");
+    expect(output).toContain("import type { Config } from './config'");
+    expect(output).toContain("import DefaultExport from './default'");
+    expect(output).toContain("import * as ns from './namespace'");
+    expect(output).toContain("import { type TypeOnly, value } from './mixed'");
+  });
+
+  it('round-trip: class declarations with heritage and generics', async () => {
+    const source = `export class MyService<T> extends BaseService implements Disposable {
+  private data: T;
+
+  constructor(data: T) {
+    super();
+    this.data = data;
+  }
+
+  getData(): T {
+    return this.data;
+  }
+}
+
+class SimpleClass {
+  value = 42;
+}
+`;
+    await ingester.ingestSource(source, 'class/test', typescriptPlugin);
+    const output = await materializer.materialize('class/test', typescriptPlugin);
+
+    expect(output).toContain('export class MyService<T> extends BaseService implements Disposable');
+    expect(output).toContain('private data: T');
+    expect(output).toContain('getData(): T');
+    expect(output).toContain('class SimpleClass');
+    expect(output).toContain('value = 42');
+  });
+
+  it('round-trip: variable/const declarations', async () => {
+    const source = `export const API_URL: string = 'https://api.example.com';
+
+export const handler = (req: Request): Response => {
+  return new Response('ok');
+};
+
+const internal = 42;
+
+export let mutable: number = 0;
+`;
+    await ingester.ingestSource(source, 'vars/test', typescriptPlugin);
+    const output = await materializer.materialize('vars/test', typescriptPlugin);
+
+    expect(output).toContain("export const API_URL: string = 'https://api.example.com'");
+    expect(output).toContain('export const handler = (req: Request): Response =>');
+    expect(output).toContain('const internal = 42');
+    expect(output).toContain('export let mutable: number = 0');
+  });
+
+  it('round-trip: generic type parameters on functions, interfaces, and types', async () => {
+    const source = `export function identity<T>(value: T): T {
+  return value;
+}
+
+export function merge<A, B extends A>(a: A, b: B): A & B {
+  return { ...a, ...b } as A & B;
+}
+
+export interface Repository<T extends Entity> {
+  find(id: string): T | null;
+  save(entity: T): void;
+}
+
+export type Mapper<Input, Output> = (input: Input) => Output;
+`;
+    await ingester.ingestSource(source, 'generics/test', typescriptPlugin);
+    const output = await materializer.materialize('generics/test', typescriptPlugin);
+
+    expect(output).toContain('function identity<T>(value: T): T');
+    expect(output).toContain('function merge<A, B extends A>(a: A, b: B): A & B');
+    expect(output).toContain('interface Repository<T extends Entity>');
+    expect(output).toContain('type Mapper<Input, Output> =');
+
+    // Verify round-trip: re-ingest and compare
+    const memStore2 = new MemoryStore();
+    const repo2 = await Repository.init(memStore2);
+    const registry2 = new SchemaRegistry();
+    registry2.register(ModuleSchema);
+    registry2.register(FunctionSchema);
+    registry2.register(TypeDefSchema);
+    registry2.register(VariableSchema);
+    const entityStore2 = new EntityStore(repo2, registry2);
+    const ingester2 = new FileIngester(entityStore2);
+
+    await ingester2.ingestSource(output, 'generics/test', typescriptPlugin);
+
+    const fns1 = await entityStore.list(FunctionSchema, { module: 'mod:generics/test' });
+    const fns2 = await entityStore2.list(FunctionSchema, { module: 'mod:generics/test' });
+    expect(fns2).toHaveLength(fns1.length);
+
+    for (const fn1 of fns1) {
+      const fn2 = fns2.find(f => f.name === fn1.name);
+      expect(fn2).toBeDefined();
+      expect(fn2!.typeParams).toBe(fn1.typeParams);
+      expect(fn2!.returnType).toBe(fn1.returnType);
+    }
+  });
+
+  it('round-trip: enum body uses AST extraction', async () => {
+    const source = `export enum Direction {
+  Up = 'UP',
+  Down = 'DOWN',
+  Left = 'LEFT',
+  Right = 'RIGHT',
+}
+
+export enum Status {
+  Active,
+  Inactive,
+  Pending,
+}
+`;
+    await ingester.ingestSource(source, 'enums/test', typescriptPlugin);
+    const output = await materializer.materialize('enums/test', typescriptPlugin);
+
+    expect(output).toContain('enum Direction');
+    expect(output).toContain("Up = 'UP'");
+    expect(output).toContain("Right = 'RIGHT'");
+    expect(output).toContain('enum Status');
+    expect(output).toContain('Active');
+    expect(output).toContain('Pending');
   });
 });

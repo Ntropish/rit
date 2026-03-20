@@ -6,6 +6,7 @@ export const ModuleSchema: EntitySchema = {
   fields: {
     path: { type: 'string', required: true },
     imports: { type: 'ref[]', refTarget: 'mod' },
+    importDeclarations: { type: 'ref[]' },
   },
 };
 
@@ -22,6 +23,7 @@ export const FunctionSchema: EntitySchema = {
     body: { type: 'string', required: true },
     order: { type: 'number', required: true },
     jsdoc: { type: 'string' },
+    typeParams: { type: 'string' },
   },
 };
 
@@ -34,6 +36,22 @@ export const TypeDefSchema: EntitySchema = {
     exported: { type: 'boolean' },
     kind: { type: 'string', required: true },
     body: { type: 'string', required: true },
+    order: { type: 'number', required: true },
+    typeParams: { type: 'string' },
+    heritage: { type: 'string' },
+  },
+};
+
+export const VariableSchema: EntitySchema = {
+  prefix: 'var',
+  identity: ['module', 'name'],
+  fields: {
+    module: { type: 'ref', refTarget: 'mod', required: true },
+    name: { type: 'string', required: true },
+    exported: { type: 'boolean' },
+    declarationKind: { type: 'string', required: true },
+    typeAnnotation: { type: 'string' },
+    initializer: { type: 'string', required: true },
     order: { type: 'number', required: true },
   },
 };
