@@ -1,0 +1,20 @@
+{
+  "name": "@rit/diff-render",
+  "version": "0.0.1",
+  "description": "Semantic diff rendering for rit stores",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "rgit": "file:../../",
+    "@rit/schema": "file:../rit-schema"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
+  }
+}
