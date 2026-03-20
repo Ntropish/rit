@@ -4,5 +4,5 @@ Rit is a versioned key-value store in a single file. It combines Redis-like data
 
 ## Guides
 
-- [Getting Started](getting-started.md) — Learn the commands. Start using rit in five minutes.
-- [Rit from the Bottom Up](rit-from-the-bottom-up.md) — Understand how rit works internally, then watch the commands become obvious.
+- [Getting Started](getting-started.md) - Learn the commands. Start using rit in five minutes.
+- [Rit from the Bottom Up](rit-from-the-bottom-up.md) - Understand how rit works internally, then watch the commands become obvious.

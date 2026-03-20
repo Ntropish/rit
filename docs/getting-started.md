@@ -1,6 +1,6 @@
 # Getting Started with Rit
 
-A simple guide. No deep theory — just the commands you need.
+A simple guide. No deep theory, just the commands you need.
 
 ## Install
 
@@ -94,7 +94,7 @@ ZRANGE leaderboard 0 -1
 
 ### Lists
 
-Ordered sequences, push from either end.
+Ordered sequences. Push from either end.
 
 ```
 RPUSH queue task-1 task-2 task-3
@@ -236,4 +236,4 @@ MERGE main
 # production now has cache_ttl=300 AND db_host=db.prod.internal
 ```
 
-Your entire project is one file: `project.rit`. Copy it, back it up, sync it — it's all there.
+Your entire project is one file: `project.rit`. Copy it, back it up, sync it. It's all in there.
