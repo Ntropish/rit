@@ -1,8 +1,8 @@
-# rgit — Agent Task Backlog
+# rit — Agent Task Backlog
 
 ## What This Project Is
 
-`rgit` is a versioned key-value store that combines Redis-like data operations with Git-like version control semantics, built on a prolly tree (probabilistic B-tree). It's written in TypeScript, targets both browser and Node.js, and uses a plugin system for persistence.
+`rit` is a versioned key-value store that combines Redis-like data operations with Git-like version control semantics, built on a prolly tree (probabilistic B-tree). It's written in TypeScript, targets both browser and Node.js, and uses a plugin system for persistence.
 
 **Core idea:** Every Redis operation (SET, HSET, ZADD, etc.) mutates an immutable prolly tree. Every commit snapshots the tree's root hash. Branches are named pointers to commits. Diffing and merging work at the key-value level, not the file/line level — so two branches that edit different fields of the same hash merge cleanly without conflict.
 
@@ -190,7 +190,7 @@ src/
 - Add a CLI entry point that opens a REPL with Redis-like commands.
 - Commands: `SET`, `GET`, `HSET`, `HGET`, `HGETALL`, `SADD`, `SMEMBERS`, `ZADD`, `ZRANGE`, `RPUSH`, `LRANGE`, `DEL`, `EXISTS`, `TYPE`.
 - Git commands: `COMMIT <message>`, `BRANCH <name>`, `CHECKOUT <name>`, `LOG`, `DIFF`, `MERGE <branch>`, `BRANCHES`.
-- Use the FS store for persistence (default path: `.rgit/` in current directory).
+- Use the FS store for persistence (default path: `.rit/` in current directory).
 - Add as `bin` entry in package.json.
 **Tests:** Scripted integration test that pipes commands to stdin and verifies stdout.
 
@@ -222,7 +222,7 @@ src/
 ## Running the Project
 
 ```bash
-cd rgit
+cd rit
 npm install
 npm test          # runs vitest
 npx tsc           # type-check (no emit needed for tests)
