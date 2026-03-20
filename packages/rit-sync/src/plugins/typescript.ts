@@ -17,11 +17,12 @@ function getBodyFromBraces(node: { getMembers(): { getText(): string }[]; getTex
 }
 
 export const typescriptPlugin: LanguagePlugin = {
-  extensions: ['.ts', '.tsx'],
+  extensions: ['.ts', '.tsx', '.js', '.jsx'],
 
   ingest(source: string, modulePath: string): EntityWrite[] {
     const project = new Project({ useInMemoryFileSystem: true });
-    const sourceFile = project.createSourceFile('input.ts', source);
+    // Use .tsx which is permissive enough to parse TS, TSX, JS, and JSX
+    const sourceFile = project.createSourceFile('input.tsx', source);
     const writes: EntityWrite[] = [];
     const moduleKey = `mod:${modulePath}`;
 

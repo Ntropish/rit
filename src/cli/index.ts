@@ -386,24 +386,26 @@ async function dispatch(repo: Repository, cmd: string, args: string[]): Promise<
       const entityStore = new EntityStore(repo, registry);
       const ingester = new FileIngester(entityStore);
 
-      // Collect .ts files recursively
-      function collectTsFiles(d: string): string[] {
+      // Collect source files recursively (.ts, .tsx, .js, .jsx)
+      const sourceExts = ['.ts', '.tsx', '.js', '.jsx'];
+      const testSuffixes = ['.d.ts', '.spec.ts', '.test.ts', '.spec.js', '.test.js'];
+      function collectSourceFiles(d: string): string[] {
         const files: string[] = [];
         for (const entry of readdirSync(d)) {
           const full = join(d, entry);
           const stat = statSync(full);
           if (stat.isDirectory()) {
             if (entry === 'node_modules' || entry === '__tests__' || entry === 'test' || entry === 'dist') continue;
-            files.push(...collectTsFiles(full));
-          } else if (entry.endsWith('.ts') && !entry.endsWith('.d.ts') && !entry.endsWith('.spec.ts') && !entry.endsWith('.test.ts')) {
+            files.push(...collectSourceFiles(full));
+          } else if (sourceExts.some(ext => entry.endsWith(ext)) && !testSuffixes.some(suf => entry.endsWith(suf))) {
             files.push(full);
           }
         }
         return files;
       }
 
-      const tsFiles = collectTsFiles(dir);
-      if (tsFiles.length === 0) { console.log('(error) no TypeScript files found'); return; }
+      const tsFiles = collectSourceFiles(dir);
+      if (tsFiles.length === 0) { console.log('(error) no source files found'); return; }
 
       let ingested = 0;
       let failed = 0;
@@ -412,7 +414,7 @@ async function dispatch(repo: Repository, cmd: string, args: string[]): Promise<
       let varCount = 0;
 
       for (const file of tsFiles) {
-        const modulePath = relative(dir, file).replace(/\.ts$/, '').replace(/\\/g, '/');
+        const modulePath = relative(dir, file).replace(/\.(tsx?|jsx?)$/, '').replace(/\\/g, '/');
         const source = readFileSync(file, 'utf-8');
 
         try {

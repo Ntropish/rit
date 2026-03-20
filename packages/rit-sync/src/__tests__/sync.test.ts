@@ -395,3 +395,103 @@ export type { MyType } from './types';
     expect(output).toContain("export { Foo, Bar } from './stuff'");
   });
 });
+
+describe('JavaScript/JSX support', () => {
+  let repo: Repository;
+  let ingester: FileIngester;
+  let materializer: FileMaterializer;
+
+  beforeEach(async () => {
+    const store = new MemoryStore();
+    repo = await Repository.init(store);
+    const registry = new SchemaRegistry();
+    registry.register(ModuleSchema);
+    registry.register(FunctionSchema);
+    registry.register(TypeDefSchema);
+    registry.register(VariableSchema);
+    const entityStore = new EntityStore(repo, registry);
+    ingester = new FileIngester(entityStore);
+    materializer = new FileMaterializer(entityStore);
+  });
+
+  it('plugin declares .js and .jsx as supported extensions', () => {
+    expect(typescriptPlugin.extensions).toContain('.js');
+    expect(typescriptPlugin.extensions).toContain('.jsx');
+  });
+
+  it('ingests plain JS functions without type annotations', async () => {
+    const source = `export function greet(name) {
+  return 'Hello ' + name;
+}
+
+function helper(x, y) {
+  return x + y;
+}
+`;
+    const writes = typescriptPlugin.ingest(source, 'utils/greeting');
+
+    const fns = writes.filter(w => w.schema.prefix === 'fn');
+    expect(fns).toHaveLength(2);
+
+    const greet = fns.find(w => w.data.name === 'greet');
+    expect(greet).toBeDefined();
+    expect(greet!.data.exported).toBe(true);
+    expect(greet!.data.params).toBe('name');
+    expect(greet!.data.returnType).toBe('');
+
+    const helper = fns.find(w => w.data.name === 'helper');
+    expect(helper).toBeDefined();
+    expect(helper!.data.exported).toBe(false);
+    expect(helper!.data.params).toBe('x, y');
+  });
+
+  it('ingests ES import declarations from JS', async () => {
+    const source = `import { readFile } from 'fs';
+import path from 'path';
+
+export function doStuff() {
+  return path.join('a', 'b');
+}
+`;
+    const writes = typescriptPlugin.ingest(source, 'utils/files');
+
+    const mod = writes.find(w => w.schema.prefix === 'mod');
+    expect(mod).toBeDefined();
+    expect(mod!.data.imports).toEqual(['mod:fs', 'mod:path']);
+    expect((mod!.data.importDeclarations as string[]).length).toBe(2);
+  });
+
+  it('preserves JSX expressions in function bodies', async () => {
+    const source = `export function Button(props) {
+  return <button className={props.className}>{props.label}</button>;
+}
+`;
+    const writes = typescriptPlugin.ingest(source, 'components/Button');
+
+    const fn = writes.find(w => w.schema.prefix === 'fn');
+    expect(fn).toBeDefined();
+    expect(fn!.data.name).toBe('Button');
+    expect(fn!.data.body).toContain('<button');
+    expect(fn!.data.body).toContain('props.label');
+  });
+
+  it('round-trip: ingest JS source and materialize', async () => {
+    const source = `import { join } from 'path';
+
+export function buildPath(base, file) {
+  return join(base, file);
+}
+
+const DEFAULT_EXT = '.txt';
+`;
+    await ingester.ingestSource(source, 'utils/path', typescriptPlugin);
+    await repo.commit('ingest js');
+
+    const output = await materializer.materialize('utils/path', typescriptPlugin);
+
+    expect(output).toContain("import { join } from 'path'");
+    expect(output).toContain('export function buildPath(base, file)');
+    expect(output).toContain('return join(base, file)');
+    expect(output).toContain("const DEFAULT_EXT = '.txt'");
+  });
+});
