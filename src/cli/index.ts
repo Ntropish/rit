@@ -1,29 +1,77 @@
 #!/usr/bin/env bun
 import { createInterface } from 'node:readline';
-import { join } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
+import { existsSync, readdirSync } from 'node:fs';
 import { Repository } from '../repo/index.js';
 import { openSqliteStore } from '../store/sqlite.js';
 
-// Use CLI argument or default to project.rit in cwd
-const filePath = process.argv[2] ?? join(process.cwd(), 'project.rit');
+/**
+ * Walk up from dir looking for a .rit file.
+ * Returns the first .rit file found, or null.
+ */
+function findRitFile(dir: string): string | null {
+  let current = resolve(dir);
+  while (true) {
+    try {
+      const entries = readdirSync(current);
+      const ritFile = entries.find(e => e.endsWith('.rit'));
+      if (ritFile) return join(current, ritFile);
+    } catch {}
+    const parent = dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
+// Resolve file path and command args:
+// - If first arg ends with .rit, treat it as the file
+// - Otherwise, auto-detect by walking up from cwd
+let filePath: string;
+let commandArgs: string[];
+
+const firstArg = process.argv[2];
+if (firstArg && firstArg.endsWith('.rit')) {
+  filePath = resolve(firstArg);
+  commandArgs = process.argv.slice(3);
+} else {
+  const found = findRitFile(process.cwd());
+  if (!found) {
+    console.error('No .rit file found. Specify one or run from a directory containing a .rit file.');
+    process.exit(1);
+  }
+  filePath = found;
+  commandArgs = process.argv.slice(2);
+}
+
 const { store, refStore, close } = openSqliteStore(filePath);
 
 async function main() {
   const repo = await Repository.init(store, refStore);
 
-  // Try to restore HEAD state if refs exist
+  // Restore HEAD state if refs exist
   const branches = await repo.branches();
   if (branches.length > 0 && branches.includes('main')) {
     try { await repo.checkout('main'); } catch {}
   }
 
+  // If a command was passed, run it and exit
+  if (commandArgs.length > 0) {
+    try {
+      await handleCommand(repo, commandArgs.join(' '));
+    } catch (err: any) {
+      console.log(`(error) ${err.message}`);
+    }
+    close();
+    return;
+  }
+
+  // Otherwise, start the REPL
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
     prompt: 'rit> ',
   });
 
-  // Serialize async command processing so commands don't race
   let queue: Promise<void> = Promise.resolve();
 
   rl.on('line', (line) => {
