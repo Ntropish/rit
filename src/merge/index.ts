@@ -21,6 +21,7 @@ import {
   listItemKey,
 } from '../types/index.js';
 import type { Store, Hash } from '../store/types.js';
+import { HybridLogicalClock, type HlcTimestamp } from '../hlc/index.js';
 
 // ── Merge types ───────────────────────────────────────────────
 
@@ -44,11 +45,17 @@ interface MergeResolution {
   conflicts: MergeConflict[];
 }
 
+export interface MergeContext {
+  oursHlc?: HlcTimestamp;
+  theirsHlc?: HlcTimestamp;
+}
+
 interface MergeStrategy {
   resolve(
     redisKey: string,
     ourDiffs: DiffEntry[],
     theirDiffs: DiffEntry[],
+    context?: MergeContext,
   ): MergeResolution;
 }
 
@@ -84,7 +91,7 @@ function tagToRedisType(tag: number): RedisType {
 // ── Strategies ────────────────────────────────────────────────
 
 const defaultStrategy: MergeStrategy = {
-  resolve(_redisKey, ourDiffs, theirDiffs) {
+  resolve(_redisKey, ourDiffs, theirDiffs, context) {
     const puts: Array<{ key: Uint8Array; value: Uint8Array }> = [];
     const deletes: Uint8Array[] = [];
     const conflicts: MergeConflict[] = [];
@@ -107,6 +114,14 @@ const defaultStrategy: MergeStrategy = {
       } else if (ours && theirs) {
         if (sameDiff(ours, theirs)) {
           applyDiff(ours, puts, deletes);
+        } else if (context?.oursHlc && context?.theirsHlc) {
+          // HLC-based last-writer-wins: higher HLC wins
+          const cmp = HybridLogicalClock.compare(context.oursHlc, context.theirsHlc);
+          if (cmp >= 0) {
+            applyDiff(ours, puts, deletes);
+          } else {
+            applyDiff(theirs, puts, deletes);
+          }
         } else {
           conflicts.push({
             key: ours.key,
@@ -341,6 +356,7 @@ export async function threeWayMerge(
   oursHash: Hash | null,
   theirsHash: Hash | null,
   config?: { targetChunkSize?: number },
+  context?: MergeContext,
 ): Promise<MergeResult> {
   const baseTree = new ProllyTree(store, baseHash, config);
   const oursTree = new ProllyTree(store, oursHash, config);
@@ -395,6 +411,7 @@ export async function threeWayMerge(
       redisKey,
       ourGroup?.diffs ?? [],
       theirGroup?.diffs ?? [],
+      context,
     );
 
     allPuts.push(...resolution.puts);

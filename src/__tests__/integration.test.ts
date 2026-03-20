@@ -448,7 +448,7 @@ describe('Repository — redis+git integration', () => {
       expect(user).toEqual({ name: 'alice', age: '31', city: 'denver' });
     });
 
-    it('conflict: same hash field modified differently on both sides', async () => {
+    it('HLC LWW: same hash field modified differently resolves to later commit', async () => {
       let db = repo.data();
       db = await db.hmset('config', { theme: 'light', lang: 'en' });
       await repo.commit('initial', db);
@@ -464,8 +464,13 @@ describe('Repository — redis+git integration', () => {
       db = await db.hset('config', 'theme', 'solarized');
       await repo.commit('main theme', db);
 
+      // With HLC, the later commit (main) wins via last-writer-wins
       const result = await repo.merge('feature');
-      expect(result.conflicts.length).toBeGreaterThan(0);
+      expect(result.conflicts).toHaveLength(0);
+
+      db = repo.data();
+      const config = await db.hgetall('config');
+      expect(config.theme).toBe('solarized');
     });
 
     it('clean merge: same hash field set to same value on both sides', async () => {
@@ -575,7 +580,7 @@ describe('Repository — redis+git integration', () => {
       });
     });
 
-    it('conflict: both sides modify same field of entity hash', async () => {
+    it('HLC LWW: same entity field modified differently resolves to later commit', async () => {
       let db = repo.data();
       db = await db.hmset('fn:utils:add', {
         body: '{ return a + b; }',
@@ -595,11 +600,16 @@ describe('Repository — redis+git integration', () => {
       db = await db.hset('fn:utils:add', 'body', '{ return Number(a) + Number(b); }');
       await repo.commit('fix body another way', db);
 
+      // With HLC, the later commit (main) wins
       const result = await repo.merge('feature');
-      expect(result.conflicts.length).toBeGreaterThan(0);
+      expect(result.conflicts).toHaveLength(0);
+
+      db = repo.data();
+      const fn = await db.hgetall('fn:utils:add');
+      expect(fn.body).toBe('{ return Number(a) + Number(b); }');
     });
 
-    it('conflict: both sides modify same key differently', async () => {
+    it('HLC LWW: same key modified differently resolves to later commit', async () => {
       let db = repo.data();
       db = await db.set('x', 'base');
       await repo.commit('initial', db);
@@ -615,8 +625,10 @@ describe('Repository — redis+git integration', () => {
       db = await db.set('x', 'main_value');
       await repo.commit('main change', db);
 
+      // With HLC, the later commit (main) wins
       const result = await repo.merge('feature');
-      expect(result.conflicts.length).toBeGreaterThan(0);
+      expect(result.conflicts).toHaveLength(0);
+      expect(await repo.data().get('x')).toBe('main_value');
     });
 
     it('same change on both sides: no conflict', async () => {
@@ -768,7 +780,7 @@ describe('Repository — redis+git integration', () => {
       ]);
     });
 
-    it('concurrent ZADD same member different scores: conflict', async () => {
+    it('HLC LWW: concurrent ZADD same member different scores resolves to later', async () => {
       let db = repo.data();
       db = await db.zadd('lb', 10, 'alice');
       await repo.commit('initial', db);
@@ -784,11 +796,16 @@ describe('Repository — redis+git integration', () => {
       db = await db.zadd('lb', 99, 'alice');
       await repo.commit('main score', db);
 
+      // With HLC, the later commit (main, score=99) wins
       const result = await repo.merge('feature');
-      expect(result.conflicts.length).toBeGreaterThan(0);
+      expect(result.conflicts).toHaveLength(0);
+
+      db = repo.data();
+      const score = await db.zscore('lb', 'alice');
+      expect(score).toBe(99);
     });
 
-    it('delete vs modify on different types: conflict', async () => {
+    it('HLC LWW: delete vs modify resolves to later commit', async () => {
       let db = repo.data();
       db = await db.set('x', 'val');
       await repo.commit('initial', db);
@@ -804,7 +821,108 @@ describe('Repository — redis+git integration', () => {
       db = await db.del('x');
       await repo.commit('main delete', db);
 
+      // With HLC, the later commit (main, delete) wins
       const result = await repo.merge('feature');
+      expect(result.conflicts).toHaveLength(0);
+      expect(await repo.data().get('x')).toBeNull();
+    });
+
+    it('HLC LWW determinism: merge direction does not affect result', async () => {
+      // Repo A: commits on main
+      const storeA = new MemoryStore();
+      const repoA = await Repository.init(storeA);
+      let dbA = repoA.data();
+      dbA = await dbA.set('x', 'base');
+      await repoA.commit('initial', dbA);
+
+      await repoA.branch('feature');
+      await repoA.checkout('feature');
+      dbA = repoA.data();
+      dbA = await dbA.set('x', 'feature_value');
+      await repoA.commit('feature', dbA);
+
+      await repoA.checkout('main');
+      dbA = repoA.data();
+      dbA = await dbA.set('x', 'main_value');
+      await repoA.commit('main', dbA);
+
+      // Merge feature into main
+      const resultAB = await repoA.merge('feature');
+      expect(resultAB.conflicts).toHaveLength(0);
+      const valueAB = await repoA.data().get('x');
+
+      // Repo B: same setup, but merge main into feature
+      const storeB = new MemoryStore();
+      const repoB = await Repository.init(storeB);
+      let dbB = repoB.data();
+      dbB = await dbB.set('x', 'base');
+      await repoB.commit('initial', dbB);
+
+      await repoB.branch('feature');
+      await repoB.checkout('feature');
+      dbB = repoB.data();
+      dbB = await dbB.set('x', 'feature_value');
+      await repoB.commit('feature', dbB);
+
+      await repoB.checkout('main');
+      dbB = repoB.data();
+      dbB = await dbB.set('x', 'main_value');
+      await repoB.commit('main', dbB);
+
+      // Now merge from the other direction: on feature, merge main
+      await repoB.checkout('feature');
+      const resultBA = await repoB.merge('main');
+      expect(resultBA.conflicts).toHaveLength(0);
+      const valueBA = await repoB.data().get('x');
+
+      // Both should resolve to the same value (higher HLC wins)
+      expect(valueAB).toBe(valueBA);
+    });
+
+    it('without HLCs: same key conflict still reported via threeWayMerge', async () => {
+      // Use threeWayMerge directly without MergeContext to test backward compat
+      const { threeWayMerge: merge3 } = await import('../merge/index.js');
+      const testStore = new MemoryStore();
+      const testRepo = await Repository.init(testStore);
+
+      let db2 = testRepo.data();
+      db2 = await db2.set('x', 'base');
+      await testRepo.commit('initial', db2);
+
+      await testRepo.branch('feature');
+      await testRepo.checkout('feature');
+      db2 = testRepo.data();
+      db2 = await db2.set('x', 'feature_val');
+      await testRepo.commit('feature', db2);
+
+      await testRepo.checkout('main');
+      db2 = testRepo.data();
+      db2 = await db2.set('x', 'main_val');
+      await testRepo.commit('main', db2);
+
+      // Get commit tree hashes
+      const { CommitGraph } = await import('../commit/index.js');
+      const graph = new CommitGraph(testStore);
+
+      const headHash = await testRepo['refs'].getRef('refs/heads/main');
+      const featureHash = await testRepo['refs'].getRef('refs/heads/feature');
+
+      const mainCommit = await graph.getCommit(headHash!);
+      const featureCommit = await graph.getCommit(featureHash!);
+
+      // Find base (initial commit)
+      const base = await graph.findMergeBase(headHash!, featureHash!);
+      const baseCommit = await graph.getCommit(base!);
+
+      // Call threeWayMerge without context (no HLCs)
+      const result = await merge3(
+        testStore,
+        baseCommit!.treeHash,
+        mainCommit!.treeHash,
+        featureCommit!.treeHash,
+      );
+
+      // Without HLC context, this should be a conflict
       expect(result.conflicts.length).toBeGreaterThan(0);
     });
   });

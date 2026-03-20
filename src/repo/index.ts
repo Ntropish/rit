@@ -298,9 +298,13 @@ export class Repository {
     const oursTreeHash = oursCommit?.treeHash ?? null;
     const theirsTreeHash = theirsCommit?.treeHash ?? null;
 
-    // Three-way merge
+    // Three-way merge with HLC context for last-writer-wins
+    const mergeContext = (oursCommit?.hlc && theirsCommit?.hlc)
+      ? { oursHlc: oursCommit.hlc, theirsHlc: theirsCommit.hlc }
+      : undefined;
     const result = await threeWayMerge(
       this.store, baseTreeHash, oursTreeHash, theirsTreeHash,
+      undefined, mergeContext,
     );
 
     // Update working tree with merge result
