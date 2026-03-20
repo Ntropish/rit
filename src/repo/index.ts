@@ -325,4 +325,8 @@ export class Repository {
   async type(key: string): Promise<'string' | 'hash' | 'set' | 'zset' | 'list' | 'none'> {
     return this._working.type(key);
   }
+
+  async *keys(pattern?: string): AsyncIterable<string> {
+    yield* this._working.keys(pattern);
+  }
 }
