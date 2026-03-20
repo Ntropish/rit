@@ -2,18 +2,18 @@ import type { BunPlugin } from 'bun';
 import { Repository } from '../../../src/repo/index.js';
 import { SchemaRegistry, EntityStore } from '../../../packages/rit-schema/src/index.js';
 import { ModuleSchema, FunctionSchema, TypeDefSchema } from '../../../packages/rit-sync/src/schemas.js';
-import type { ModuleEntities } from '../../../packages/rit-sync/src/types.js';
+import type { FileEntities } from '../../../packages/rit-sync/src/types.js';
 import { openSqliteStore } from '../../../src/store/sqlite.js';
 
 /**
  * Materialize a module's TypeScript source from its entities.
  * This is a standalone materializer that doesn't require ts-morph.
  */
-function materializeTypeScript(entities: ModuleEntities): string {
+function materializeTypeScript(entities: FileEntities): string {
   const lines: string[] = [];
 
-  // Imports from module entity
-  const imports = entities.module.imports as string[] | undefined;
+  // Imports from root entity
+  const imports = entities.root.imports as string[] | undefined;
   if (imports && imports.length > 0) {
     for (const imp of imports) {
       const modPath = imp.startsWith('mod:') ? imp.slice(4) : imp;
@@ -26,10 +26,10 @@ function materializeTypeScript(entities: ModuleEntities): string {
   type Declaration = { kind: 'function' | 'type'; data: Record<string, unknown>; order: number };
   const declarations: Declaration[] = [];
 
-  for (const fn of entities.functions) {
+  for (const fn of (entities.children['fn'] ?? [])) {
     declarations.push({ kind: 'function', data: fn, order: fn.order as number });
   }
-  for (const typ of entities.types) {
+  for (const typ of (entities.children['typ'] ?? [])) {
     declarations.push({ kind: 'type', data: typ, order: typ.order as number });
   }
   declarations.sort((a, b) => a.order - b.order);
@@ -109,7 +109,7 @@ export function ritBuildPlugin(ritFilePath: string): BunPlugin {
         const functions = await entityStore.list(FunctionSchema, { module: moduleKey });
         const types = await entityStore.list(TypeDefSchema, { module: moduleKey });
 
-        const source = materializeTypeScript({ module: mod, functions, types });
+        const source = materializeTypeScript({ root: mod, children: { fn: functions, typ: types } });
 
         return {
           contents: source,

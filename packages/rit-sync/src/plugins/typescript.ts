@@ -1,5 +1,5 @@
 import { Project, SyntaxKind, Node } from 'ts-morph';
-import type { LanguagePlugin, EntityWrite, ModuleEntities } from '../types.js';
+import type { LanguagePlugin, EntityWrite, FileEntities } from '../types.js';
 import { ModuleSchema, FunctionSchema, TypeDefSchema, VariableSchema } from '../schemas.js';
 
 function getTypeParamsText(node: { getTypeParameters(): { getText(): string }[] }): string | undefined {
@@ -220,11 +220,11 @@ export const typescriptPlugin: LanguagePlugin = {
     return writes;
   },
 
-  materialize(entities: ModuleEntities): string {
+  materialize(entities: FileEntities): string {
     const lines: string[] = [];
 
-    // Imports from module entity
-    const importDecls = entities.module.importDeclarations as string[] | undefined;
+    // Imports from root entity
+    const importDecls = entities.root.importDeclarations as string[] | undefined;
     if (importDecls && importDecls.length > 0) {
       for (const decl of importDecls) {
         lines.push(decl);
@@ -236,13 +236,13 @@ export const typescriptPlugin: LanguagePlugin = {
     type Declaration = { kind: 'function' | 'type' | 'variable'; data: Record<string, unknown>; order: number };
     const declarations: Declaration[] = [];
 
-    for (const fn of entities.functions) {
+    for (const fn of (entities.children['fn'] ?? [])) {
       declarations.push({ kind: 'function', data: fn, order: fn.order as number });
     }
-    for (const typ of entities.types) {
+    for (const typ of (entities.children['typ'] ?? [])) {
       declarations.push({ kind: 'type', data: typ, order: typ.order as number });
     }
-    for (const v of entities.variables) {
+    for (const v of (entities.children['var'] ?? [])) {
       declarations.push({ kind: 'variable', data: v, order: v.order as number });
     }
     declarations.sort((a, b) => a.order - b.order);
@@ -291,7 +291,7 @@ export const typescriptPlugin: LanguagePlugin = {
     }
 
     // Export declarations (re-exports)
-    const exportDecls = entities.module.exportDeclarations as string[] | undefined;
+    const exportDecls = entities.root.exportDeclarations as string[] | undefined;
     if (exportDecls && exportDecls.length > 0) {
       for (const decl of exportDecls) {
         lines.push(decl);

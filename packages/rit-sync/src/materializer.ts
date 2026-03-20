@@ -1,6 +1,6 @@
 import type { EntityStore } from '../../../packages/rit-schema/src/index.js';
 import { ModuleSchema, FunctionSchema, TypeDefSchema, VariableSchema } from './schemas.js';
-import type { LanguagePlugin, ModuleEntities } from './types.js';
+import type { LanguagePlugin, FileEntities } from './types.js';
 
 export class FileMaterializer {
   constructor(private entityStore: EntityStore) {}
@@ -24,11 +24,13 @@ export class FileMaterializer {
     // Get variables for this module
     const allVariables = await this.entityStore.list(VariableSchema, { module: moduleKey });
 
-    const entities: ModuleEntities = {
-      module,
-      functions: allFunctions,
-      types: allTypes,
-      variables: allVariables,
+    const entities: FileEntities = {
+      root: module,
+      children: {
+        fn: allFunctions,
+        typ: allTypes,
+        var: allVariables,
+      },
     };
 
     return plugin.materialize(entities);

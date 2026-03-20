@@ -5,15 +5,13 @@ export interface EntityWrite {
   data: Record<string, unknown>;
 }
 
-export interface ModuleEntities {
-  module: Record<string, unknown>;
-  functions: Record<string, unknown>[];
-  types: Record<string, unknown>[];
-  variables: Record<string, unknown>[];
+export interface FileEntities {
+  root: Record<string, unknown>;
+  children: Record<string, Record<string, unknown>[]>;
 }
 
 export interface LanguagePlugin {
   extensions: string[];
   ingest(source: string, modulePath: string): EntityWrite[];
-  materialize(entities: ModuleEntities): string;
+  materialize(entities: FileEntities): string;
 }
