@@ -641,4 +641,74 @@ describe('Repository — redis+git integration', () => {
       expect(db1.tree.rootHash).toBe(db2.tree.rootHash);
     });
   });
+
+  // ── Convenience API ──────────────────────────────────────
+
+  describe('convenience methods on Repository', () => {
+    it('set/get round-trip', async () => {
+      await repo.set('name', 'alice');
+      expect(await repo.get('name')).toBe('alice');
+      expect(await repo.get('nonexistent')).toBeNull();
+    });
+
+    it('del removes across types', async () => {
+      await repo.set('k', 'val');
+      await repo.del('k');
+      expect(await repo.get('k')).toBeNull();
+    });
+
+    it('hset/hget/hgetall', async () => {
+      await repo.hset('u', 'name', 'alice');
+      await repo.hset('u', 'age', '30');
+      expect(await repo.hget('u', 'name')).toBe('alice');
+      expect(await repo.hgetall('u')).toEqual({ name: 'alice', age: '30' });
+    });
+
+    it('sadd/smembers/sismember/srem', async () => {
+      await repo.sadd('tags', 'a', 'b', 'c');
+      expect((await repo.smembers('tags')).sort()).toEqual(['a', 'b', 'c']);
+      expect(await repo.sismember('tags', 'b')).toBe(true);
+      await repo.srem('tags', 'b');
+      expect(await repo.sismember('tags', 'b')).toBe(false);
+    });
+
+    it('zadd/zscore/zrange/zrem', async () => {
+      await repo.zadd('lb', 10, 'alice');
+      await repo.zadd('lb', 20, 'bob');
+      expect(await repo.zscore('lb', 'alice')).toBe(10);
+      expect(await repo.zrange('lb', 0, -1)).toEqual([
+        { member: 'alice', score: 10 },
+        { member: 'bob', score: 20 },
+      ]);
+      await repo.zrem('lb', 'alice');
+      expect(await repo.zscore('lb', 'alice')).toBeNull();
+    });
+
+    it('rpush/lpush/lrange/llen', async () => {
+      await repo.rpush('q', 'b', 'c');
+      await repo.lpush('q', 'a');
+      expect(await repo.lrange('q', 0, -1)).toEqual(['a', 'b', 'c']);
+      expect(await repo.llen('q')).toBe(3);
+    });
+
+    it('exists/type', async () => {
+      await repo.set('sk', 'val');
+      await repo.sadd('setk', 'x');
+      expect(await repo.exists('sk')).toBe(true);
+      expect(await repo.exists('nope')).toBe(false);
+      expect(await repo.type('sk')).toBe('string');
+      expect(await repo.type('setk')).toBe('set');
+      expect(await repo.type('nope')).toBe('none');
+    });
+
+    it('convenience mutations are visible to commit', async () => {
+      await repo.set('x', '1');
+      await repo.hset('h', 'f', 'v');
+      const hash = await repo.commit('via convenience');
+
+      const snap = await repo.snapshot(hash);
+      expect(await snap.get('x')).toBe('1');
+      expect(await snap.hget('h', 'f')).toBe('v');
+    });
+  });
 });

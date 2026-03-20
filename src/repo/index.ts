@@ -242,4 +242,87 @@ export class Repository {
     const tree = new ProllyTree(this.store, commit.treeHash);
     return new RedisDataModel(tree);
   }
+
+  // ── Convenience methods ──────────────────────────────────
+  // These handle the data()/setData() threading internally.
+
+  async get(key: string): Promise<string | null> {
+    return this._working.get(key);
+  }
+
+  async set(key: string, value: string): Promise<void> {
+    this._working = await this._working.set(key, value);
+  }
+
+  async del(key: string): Promise<void> {
+    this._working = await this._working.del(key);
+  }
+
+  async hget(key: string, field: string): Promise<string | null> {
+    return this._working.hget(key, field);
+  }
+
+  async hset(key: string, field: string, value: string): Promise<void> {
+    this._working = await this._working.hset(key, field, value);
+  }
+
+  async hgetall(key: string): Promise<Record<string, string>> {
+    return this._working.hgetall(key);
+  }
+
+  async sadd(key: string, ...members: string[]): Promise<void> {
+    this._working = await this._working.sadd(key, ...members);
+  }
+
+  async srem(key: string, ...members: string[]): Promise<void> {
+    this._working = await this._working.srem(key, ...members);
+  }
+
+  async sismember(key: string, member: string): Promise<boolean> {
+    return this._working.sismember(key, member);
+  }
+
+  async smembers(key: string): Promise<string[]> {
+    return this._working.smembers(key);
+  }
+
+  async zadd(key: string, score: number, member: string): Promise<void> {
+    this._working = await this._working.zadd(key, score, member);
+  }
+
+  async zscore(key: string, member: string): Promise<number | null> {
+    return this._working.zscore(key, member);
+  }
+
+  async zrange(key: string, start: number, stop: number): Promise<Array<{ member: string; score: number }>> {
+    return this._working.zrange(key, start, stop);
+  }
+
+  async zrem(key: string, member: string): Promise<void> {
+    this._working = await this._working.zrem(key, member);
+  }
+
+  async rpush(key: string, ...values: string[]): Promise<void> {
+    this._working = await this._working.rpush(key, ...values);
+  }
+
+  async lpush(key: string, ...values: string[]): Promise<void> {
+    this._working = await this._working.lpush(key, ...values);
+  }
+
+  async lrange(key: string, start: number, stop: number): Promise<string[]> {
+    return this._working.lrange(key, start, stop);
+  }
+
+  async llen(key: string): Promise<number> {
+    return this._working.llen(key);
+  }
+
+  async exists(key: string): Promise<boolean> {
+    return this._working.exists(key);
+  }
+
+  async type(key: string): Promise<'string' | 'hash' | 'set' | 'zset' | 'list' | 'none'> {
+    return this._working.type(key);
+  }
 }
