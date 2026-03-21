@@ -50,35 +50,6 @@ function waitForMessage(ws: WebSocket): Promise<SyncMessage> {
 }
 
 describe('Rit WebSocket sync server', () => {
-  it('GET /refs returns branches', async () => {
-    const res = await fetch(`${baseUrl}/refs`);
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.branches).toBeDefined();
-    expect(body.branches.main).toBeTruthy();
-  });
-
-  it('GET /blocks/:hash returns block data', async () => {
-    // Get a valid hash from the store
-    let firstHash: string | null = null;
-    for await (const hash of serverStore.hashes()) {
-      firstHash = hash;
-      break;
-    }
-    expect(firstHash).not.toBeNull();
-
-    const res = await fetch(`${baseUrl}/blocks/${firstHash}`);
-    expect(res.status).toBe(200);
-    expect(res.headers.get('content-type')).toBe('application/octet-stream');
-    const data = new Uint8Array(await res.arrayBuffer());
-    expect(data.length).toBeGreaterThan(0);
-  });
-
-  it('GET /blocks/:hash returns 404 for missing', async () => {
-    const res = await fetch(`${baseUrl}/blocks/${'0'.repeat(64)}`);
-    expect(res.status).toBe(404);
-  });
-
   it('WebSocket: send ref-advertise, receive server refs', async () => {
     const ws = await connectWs();
     try {

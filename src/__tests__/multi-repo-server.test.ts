@@ -1,26 +1,48 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { Repository } from '../repo/index.js';
+import { openSqliteStore } from '../store/sqlite.js';
 import { createMultiRepoServer, type RitMultiServer } from '../server/index.js';
 import type { SyncMessage, RefAdvertiseMessage, PushAckMessage } from '../sync/transport.js';
-import { encodeBlockData } from '../sync/transport.js';
-import { collectMissingBlocks, collectCommitBlocks } from '../sync/blocks.js';
 
 let multiServer: RitMultiServer;
 let reposDir: string;
-let baseUrl: string;
+let port: number;
 
 beforeAll(async () => {
   reposDir = mkdtempSync(join(tmpdir(), 'rit-multi-'));
+
+  // Create alpha repo via library
+  const alpha = openSqliteStore(join(reposDir, 'alpha.rit'));
+  const alphaRepo = await Repository.init(alpha.store, alpha.refStore);
+  await alphaRepo.set('key', 'value');
+  await alphaRepo.commit('initial');
+  alpha.close();
+
+  // Create beta repo via library
+  const beta = openSqliteStore(join(reposDir, 'beta.rit'));
+  const betaRepo = await Repository.init(beta.store, beta.refStore);
+  await betaRepo.set('beta-key', 'beta-value');
+  await betaRepo.commit('beta initial');
+  beta.close();
+
   multiServer = createMultiRepoServer(reposDir, { port: 0 });
-  const port = multiServer.server.port;
-  baseUrl = `http://localhost:${port}`;
+  port = multiServer.server.port;
 });
 
 afterAll(() => {
   multiServer.close();
 });
+
+function connectWs(repoName: string): Promise<WebSocket> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws://localhost:${port}/repos/${repoName}/ws`);
+    ws.onopen = () => resolve(ws);
+    ws.onerror = () => reject();
+  });
+}
 
 function waitForMessage(ws: WebSocket): Promise<SyncMessage> {
   return new Promise((resolve) => {
@@ -33,63 +55,8 @@ function waitForMessage(ws: WebSocket): Promise<SyncMessage> {
 }
 
 describe('Multi-repo server', () => {
-  it('GET /repos returns empty list initially', async () => {
-    const res = await fetch(`${baseUrl}/repos`);
-    expect(res.status).toBe(200);
-    const repos = await res.json();
-    expect(repos).toEqual([]);
-  });
-
-  it('POST /repos/:name creates a new repo', async () => {
-    const res = await fetch(`${baseUrl}/repos/alpha`, { method: 'POST' });
-    expect(res.status).toBe(201);
-
-    const listRes = await fetch(`${baseUrl}/repos`);
-    const repos = await listRes.json();
-    expect(repos).toContain('alpha');
-  });
-
-  it('GET /repos/:name/refs returns branches', async () => {
-    // Add data to alpha repo
-    const repo = await multiServer.getRepo('alpha');
-    expect(repo).not.toBeNull();
-    await repo!.set('key', 'value');
-    await repo!.commit('initial');
-
-    const res = await fetch(`${baseUrl}/repos/alpha/refs`);
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.branches.main).toBeTruthy();
-  });
-
-  it('GET /repos/:name/blocks/:hash returns block data', async () => {
-    const repo = await multiServer.getRepo('alpha');
-    let firstHash: string | null = null;
-    for await (const hash of repo!.blockStore.hashes()) {
-      firstHash = hash;
-      break;
-    }
-    expect(firstHash).not.toBeNull();
-
-    const res = await fetch(`${baseUrl}/repos/alpha/blocks/${firstHash}`);
-    expect(res.status).toBe(200);
-    const data = new Uint8Array(await res.arrayBuffer());
-    expect(data.length).toBeGreaterThan(0);
-  });
-
-  it('returns 404 for non-existent repo', async () => {
-    const res = await fetch(`${baseUrl}/repos/nonexistent/refs`);
-    expect(res.status).toBe(404);
-  });
-
   it('WebSocket sync scoped to specific repo', async () => {
-    const port = multiServer.server.port;
-    const ws = new WebSocket(`ws://localhost:${port}/repos/alpha/ws`);
-    await new Promise<void>((resolve, reject) => {
-      ws.onopen = () => resolve();
-      ws.onerror = () => reject();
-    });
-
+    const ws = await connectWs('alpha');
     try {
       const responsePromise = waitForMessage(ws);
       ws.send(JSON.stringify({ type: 'ref-advertise', branches: {} }));
@@ -102,57 +69,36 @@ describe('Multi-repo server', () => {
     }
   });
 
-  it('two repos are independent: push to one does not affect other', async () => {
-    // Create second repo
-    await fetch(`${baseUrl}/repos/beta`, { method: 'POST' });
-    const betaRepo = await multiServer.getRepo('beta');
-    await betaRepo!.set('beta-key', 'beta-value');
-    await betaRepo!.commit('beta initial');
-
-    const alphaRepo = await multiServer.getRepo('alpha');
-
-    // Push a new key to alpha via WebSocket
-    await alphaRepo!.set('alpha-only', 'alpha-data');
-    const commitHash = await alphaRepo!.commit('alpha update');
-
-    const port = multiServer.server.port;
-    const ws = new WebSocket(`ws://localhost:${port}/repos/alpha/ws`);
-    await new Promise<void>((resolve, reject) => {
-      ws.onopen = () => resolve();
-      ws.onerror = () => reject();
+  it('rejects WebSocket to non-existent repo', async () => {
+    const ws = new WebSocket(`ws://localhost:${port}/repos/nonexistent/ws`);
+    const closed = new Promise<void>((resolve) => {
+      ws.onclose = () => resolve();
     });
+    await closed;
+  });
 
-    try {
-      // Send ref-advertise to get server refs
-      const refsPromise = waitForMessage(ws);
-      ws.send(JSON.stringify({ type: 'ref-advertise', branches: {} }));
-      await refsPromise;
+  it('two repos are independent: push to one does not affect other', async () => {
+    const alphaRepo = await multiServer.getRepo('alpha');
+    const betaRepo = await multiServer.getRepo('beta');
 
-      // Verify alpha has alpha-only
-      expect(await alphaRepo!.get('alpha-only')).toBe('alpha-data');
+    await alphaRepo!.set('alpha-only', 'alpha-data');
+    await alphaRepo!.commit('alpha update');
 
-      // Verify beta does NOT have alpha-only
-      expect(await betaRepo!.get('alpha-only')).toBeNull();
-      expect(await betaRepo!.get('beta-key')).toBe('beta-value');
-    } finally {
-      ws.close();
-    }
+    // Verify alpha has alpha-only
+    expect(await alphaRepo!.get('alpha-only')).toBe('alpha-data');
+
+    // Verify beta does NOT have alpha-only
+    expect(await betaRepo!.get('alpha-only')).toBeNull();
+    expect(await betaRepo!.get('beta-key')).toBe('beta-value');
   });
 
   it('broadcast is repo-scoped: push to alpha does not notify beta clients', async () => {
-    const port = multiServer.server.port;
-
     // Connect client to beta
-    const wsBeta = new WebSocket(`ws://localhost:${port}/repos/beta/ws`);
-    await new Promise<void>((resolve) => { wsBeta.onopen = () => resolve(); });
+    const wsBeta = await connectWs('beta');
 
-    // Connect client to alpha
-    const wsAlpha = new WebSocket(`ws://localhost:${port}/repos/alpha/ws`);
-    await new Promise<void>((resolve) => { wsAlpha.onopen = () => resolve(); });
-
-    // Connect second client to alpha (to receive broadcast)
-    const wsAlpha2 = new WebSocket(`ws://localhost:${port}/repos/alpha/ws`);
-    await new Promise<void>((resolve) => { wsAlpha2.onopen = () => resolve(); });
+    // Connect two clients to alpha
+    const wsAlpha = await connectWs('alpha');
+    const wsAlpha2 = await connectWs('alpha');
 
     try {
       // Set up listeners
@@ -168,13 +114,7 @@ describe('Multi-repo server', () => {
       await alphaRepo!.set('broadcast-test', 'broadcast-value');
       const newHash = await alphaRepo!.commit('broadcast scope test');
 
-      // Get refs for alpha to find the old hash
-      const oldHash = await alphaRepo!.refStore.getRef('refs/heads/main');
-
-      // Build and send a push message on wsAlpha
-      // (Simplified: since we committed directly on the server repo,
-      // the refs are already updated. We'll send a no-op push that
-      // the server accepts.)
+      // Send a push on wsAlpha
       const ackPromise = waitForMessage(wsAlpha);
       wsAlpha.send(JSON.stringify({
         type: 'push',

@@ -34,9 +34,7 @@ if (isRitFile) {
   const repo = await Repository.init(store, refStore);
   const { server, close: closeServer } = createRitServer(repo, { port });
 
-  console.log(`rit server listening on http://localhost:${server.port}`);
-  console.log(`  WebSocket: ws://localhost:${server.port}/ws`);
-  console.log(`  HTTP: http://localhost:${server.port}/refs`);
+  console.log(`rit server listening on ws://localhost:${server.port}/ws`);
   console.log(`  File: ${targetPath}`);
 
   closeHandler = () => { closeServer(); closeDb(); };
@@ -44,8 +42,7 @@ if (isRitFile) {
   // Multi-repo mode
   const { server, close: closeServer } = createMultiRepoServer(targetPath, { port });
 
-  console.log(`rit server listening on http://localhost:${server.port}`);
-  console.log(`  Repos: http://localhost:${server.port}/repos`);
+  console.log(`rit server listening on ws://localhost:${server.port}/repos/:name/ws`);
   console.log(`  Directory: ${targetPath}`);
 
   closeHandler = closeServer;

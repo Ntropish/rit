@@ -1,11 +1,10 @@
 import type { Server, ServerWebSocket } from 'bun';
-import { readdirSync, mkdirSync, existsSync } from 'node:fs';
+import { mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { Repository } from '../repo/index.js';
 import { openSqliteStore } from '../store/sqlite.js';
-import { advertiseRefs } from '../sync/negotiation.js';
 import { RemoteSyncServer } from '../sync/protocol.js';
-import { encodeBlockData, type BranchUpdatedMessage } from '../sync/transport.js';
+import { type BranchUpdatedMessage } from '../sync/transport.js';
 import { WebSocketTransport } from './ws-transport.js';
 
 interface ClientState {
@@ -39,22 +38,6 @@ export function createRitServer(repo: Repository, options?: RitServerOptions): R
         const upgraded = server.upgrade(req, { data: {} });
         if (upgraded) return undefined as any;
         return new Response('WebSocket upgrade failed', { status: 400 });
-      }
-
-      // GET /refs
-      if (req.method === 'GET' && url.pathname === '/refs') {
-        const ad = await advertiseRefs(repo.refStore);
-        return Response.json(ad);
-      }
-
-      // GET /blocks/:hash
-      if (req.method === 'GET' && url.pathname.startsWith('/blocks/')) {
-        const hash = url.pathname.slice('/blocks/'.length);
-        const data = await repo.blockStore.get(hash);
-        if (!data) return new Response('Not found', { status: 404 });
-        return new Response(data, {
-          headers: { 'Content-Type': 'application/octet-stream' },
-        });
       }
 
       return new Response('Not found', { status: 404 });
@@ -135,25 +118,6 @@ export function createMultiRepoServer(reposDir: string, options?: RitServerOptio
   // Ensure directory exists
   mkdirSync(reposDir, { recursive: true });
 
-  function getRepoEntry(name: string): RepoEntry | null {
-    if (repoCache.has(name)) return repoCache.get(name)!;
-
-    const filePath = join(reposDir, `${name}.rit`);
-    try {
-      const { store, refStore, close } = openSqliteStore(filePath);
-      // Synchronous init not possible; we'll lazy-init in the async path
-      const entry: RepoEntry = {
-        repo: null as any,
-        close,
-        clients: new Map(),
-      };
-      repoCache.set(name, entry);
-      return entry;
-    } catch {
-      return null;
-    }
-  }
-
   async function getRepo(name: string): Promise<Repository | null> {
     let entry = repoCache.get(name);
     if (entry && entry.repo) return entry.repo;
@@ -167,7 +131,6 @@ export function createMultiRepoServer(reposDir: string, options?: RitServerOptio
         entry = { repo, close, clients: new Map() };
         repoCache.set(name, entry);
       } else {
-        // Entry exists but repo not initialized yet
         const { store, refStore, close } = openSqliteStore(filePath);
         entry.repo = await Repository.init(store, refStore);
         entry.close = close;
@@ -178,11 +141,11 @@ export function createMultiRepoServer(reposDir: string, options?: RitServerOptio
     }
   }
 
-  // Parse repo name from path: /repos/:name/...
-  function parseRepoName(pathname: string): { name: string; rest: string } | null {
-    const match = pathname.match(/^\/repos\/([^/]+)(\/.*)?$/);
+  // Parse repo name from path: /repos/:name/ws
+  function parseRepoName(pathname: string): string | null {
+    const match = pathname.match(/^\/repos\/([^/]+)\/ws$/);
     if (!match) return null;
-    return { name: match[1], rest: match[2] ?? '' };
+    return match[1];
   }
 
   const server = Bun.serve({
@@ -192,57 +155,10 @@ export function createMultiRepoServer(reposDir: string, options?: RitServerOptio
     async fetch(req, server) {
       const url = new URL(req.url);
 
-      // GET /repos - list available repos
-      if (req.method === 'GET' && url.pathname === '/repos') {
-        try {
-          const files = readdirSync(reposDir);
-          const repos = files
-            .filter(f => f.endsWith('.rit'))
-            .map(f => f.slice(0, -4));
-          return Response.json(repos);
-        } catch {
-          return Response.json([]);
-        }
-      }
-
-      const parsed = parseRepoName(url.pathname);
-      if (!parsed) return new Response('Not found', { status: 404 });
-
-      const { name, rest } = parsed;
-
-      // POST /repos/:name - create a new repo
-      if (req.method === 'POST' && rest === '') {
-        const filePath = join(reposDir, `${name}.rit`);
-        const { store, refStore, close } = openSqliteStore(filePath);
-        const repo = await Repository.init(store, refStore);
-        const entry: RepoEntry = { repo, close, clients: new Map() };
-        repoCache.set(name, entry);
-        return new Response('Created', { status: 201 });
-      }
-
-      // GET /repos/:name/refs
-      if (req.method === 'GET' && rest === '/refs') {
-        const repo = await getRepo(name);
-        if (!repo) return new Response('Repo not found', { status: 404 });
-        const ad = await advertiseRefs(repo.refStore);
-        return Response.json(ad);
-      }
-
-      // GET /repos/:name/blocks/:hash
-      if (req.method === 'GET' && rest.startsWith('/blocks/')) {
-        const hash = rest.slice('/blocks/'.length);
-        const repo = await getRepo(name);
-        if (!repo) return new Response('Repo not found', { status: 404 });
-        const data = await repo.blockStore.get(hash);
-        if (!data) return new Response('Not found', { status: 404 });
-        return new Response(data, {
-          headers: { 'Content-Type': 'application/octet-stream' },
-        });
-      }
-
       // WebSocket upgrade: /repos/:name/ws
-      if (rest === '/ws') {
-        const upgraded = server.upgrade(req, { data: { repoName: name } });
+      const repoName = parseRepoName(url.pathname);
+      if (repoName) {
+        const upgraded = server.upgrade(req, { data: { repoName } });
         if (upgraded) return undefined as any;
         return new Response('WebSocket upgrade failed', { status: 400 });
       }
