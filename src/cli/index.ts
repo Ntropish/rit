@@ -434,10 +434,13 @@ async function dispatch(repo: Repository, cmd: string, args: string[]): Promise<
       // Ingest TypeScript/JavaScript files
       for (const file of tsFiles) {
         const modulePath = relative(dir, file).replace(/\.(tsx?|jsx?)$/, '').replace(/\\/g, '/');
+        const ext = file.match(/\.(tsx?|jsx?)$/)?.[1] ?? 'ts';
         const source = readFileSync(file, 'utf-8');
 
         try {
           const writes = await ingester.ingestSource(source, modulePath, typescriptPlugin);
+          // Store the original file extension on the module entity
+          await repo.hset(`mod:${modulePath}`, 'extension', ext);
           ingested++;
           for (const w of writes) {
             if (w.schema.prefix === 'fn') fnCount++;

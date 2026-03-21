@@ -5,6 +5,7 @@ export const ModuleSchema: EntitySchema = {
   identity: ['path'],
   fields: {
     path: { type: 'string', required: true },
+    extension: { type: 'string' },  // original file extension (ts, tsx, js, jsx)
     imports: { type: 'ref[]', refTarget: 'mod' },
     importDeclarations: { type: 'ref[]' },
     exportDeclarations: { type: 'ref[]' },
