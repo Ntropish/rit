@@ -187,6 +187,24 @@ export const typescriptPlugin: LanguagePlugin = {
           },
         });
         order++;
+      } else if (Node.isExportAssignment(statement)) {
+        // export default <expression>
+        const expr = statement.getExpression();
+        const exprText = expr.getText();
+
+        writes.push({
+          schema: VariableSchema,
+          data: {
+            module: moduleKey,
+            name: '__default__',
+            exported: true,
+            declarationKind: 'default',
+            initializer: exprText,
+            order,
+            isDefault: true,
+          },
+        });
+        order++;
       } else if (Node.isVariableStatement(statement)) {
         const exported = statement.isExported();
         const isDefault = statement.isDefaultExport();
@@ -264,11 +282,17 @@ export const typescriptPlugin: LanguagePlugin = {
         lines.push('');
       } else if (decl.kind === 'variable') {
         const d = decl.data;
-        const exportKw = d.isDefault ? 'export default ' : d.exported ? 'export ' : '';
         const declKind = d.declarationKind as string;
-        const typeAnn = d.typeAnnotation ? `: ${d.typeAnnotation}` : '';
         const init = d.initializer as string;
-        lines.push(`${exportKw}${declKind} ${d.name}${typeAnn} = ${init};`);
+
+        if (declKind === 'default') {
+          // export default <expression>
+          lines.push(`export default ${init};`);
+        } else {
+          const exportKw = d.isDefault ? 'export default ' : d.exported ? 'export ' : '';
+          const typeAnn = d.typeAnnotation ? `: ${d.typeAnnotation}` : '';
+          lines.push(`${exportKw}${declKind} ${d.name}${typeAnn} = ${init};`);
+        }
         lines.push('');
       } else {
         const d = decl.data;
