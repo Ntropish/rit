@@ -27,22 +27,31 @@ function findRitFile(dir: string): string | null {
   }
 }
 
+function isHttpUrl(url: string): boolean {
+  return url.startsWith('http://') || url.startsWith('https://');
+}
+
 // Handle CLONE before file path resolution (it creates a new .rit file)
 if (process.argv[2]?.toUpperCase() === 'CLONE') {
-  const wsUrl = process.argv[3];
+  const remoteUrl = process.argv[3];
   const outputPath = resolve(process.argv[4] ?? 'repo.rit');
-  if (!wsUrl) {
-    console.error('Usage: rit CLONE <ws-url> [output-path]');
+  if (!remoteUrl) {
+    console.error('Usage: rit CLONE <url> [output-path]');
     process.exit(1);
   }
 
-  const { RemoteRepository } = await import('../sync/remote-repo.js');
   const { store: cloneStore, refStore: cloneRefs, close: closeClone } = openSqliteStore(outputPath);
   try {
-    const remote = await RemoteRepository.clone(wsUrl, cloneStore, cloneRefs);
-    // Store origin URL
-    await cloneRefs.setRef('refs/remotes/origin/url', wsUrl);
-    remote.close();
+    if (isHttpUrl(remoteUrl)) {
+      const { httpClone } = await import('../sync/http-client.js');
+      await httpClone(remoteUrl, cloneStore, cloneRefs);
+    } else {
+      const { RemoteRepository } = await import('../sync/remote-repo.js');
+      const remote = await RemoteRepository.clone(remoteUrl, cloneStore, cloneRefs);
+      remote.close();
+    }
+    // Store origin URL as-is
+    await cloneRefs.setRef('refs/remotes/origin/url', remoteUrl);
     console.log(`Cloned to ${outputPath}`);
   } catch (err: any) {
     console.error(`(error) ${err.message}`);
@@ -472,22 +481,52 @@ async function dispatch(repo: Repository, cmd: string, args: string[]): Promise<
       const url = await repo.refStore.getRef(`refs/remotes/${remoteName}/url`);
       if (!url) { console.log(`(error) remote '${remoteName}' not found. Use REMOTE ADD first.`); return; }
 
-      const { WebSocketClientTransport } = await import('../sync/ws-client.js');
-      const { RemoteSyncClient } = await import('../sync/protocol.js');
-      const transport = new WebSocketClientTransport(url);
-      try {
-        await transport.connect();
-        const client = new RemoteSyncClient(repo, transport);
-        const result = await client.push(branch);
+      if (isHttpUrl(url)) {
+        const { httpPush } = await import('../sync/http-client.js');
+        const { encodeBlockData } = await import('../sync/transport.js');
+        const { collectCommitBlocks, collectMissingBlocks } = await import('../sync/blocks.js');
+
+        const localHash = await repo.refStore.getRef(`refs/heads/${branch}`);
+        if (!localHash) { console.log(`(error) branch '${branch}' not found`); return; }
+
+        // Get server's current hash for this branch
+        const refsRes = await fetch(`${url}/info/refs`);
+        const refsBody = await refsRes.json() as any;
+        const serverHash = refsBody.branches?.[branch] ?? null;
+
+        const commitBlocks = await collectCommitBlocks(repo.blockStore, repo.commitGraph, localHash, serverHash);
+        const localCommit = await repo.commitGraph.getCommit(localHash);
+        const serverCommit = serverHash ? await repo.commitGraph.getCommit(serverHash) : null;
+        const treeBlocks = await collectMissingBlocks(
+          repo.blockStore, localCommit?.treeHash ?? null, serverCommit?.treeHash ?? null,
+        );
+        const allBlocks = [...commitBlocks, ...treeBlocks];
+        const encoded = allBlocks.map(b => ({ hash: b.hash, data: encodeBlockData(b.data) }));
+
+        const result = await httpPush(url, branch, localHash, encoded);
         if (result.accepted) {
           console.log(`Pushed ${branch} to ${remoteName}`);
         } else {
           console.log(`Push rejected: ${result.reason ?? 'diverged (pull and merge first)'}`);
         }
-      } catch (err: any) {
-        console.log(`(error) ${err.message}`);
-      } finally {
-        transport.close();
+      } else {
+        const { WebSocketClientTransport } = await import('../sync/ws-client.js');
+        const { RemoteSyncClient } = await import('../sync/protocol.js');
+        const transport = new WebSocketClientTransport(url);
+        try {
+          await transport.connect();
+          const client = new RemoteSyncClient(repo, transport);
+          const result = await client.push(branch);
+          if (result.accepted) {
+            console.log(`Pushed ${branch} to ${remoteName}`);
+          } else {
+            console.log(`Push rejected: ${result.reason ?? 'diverged (pull and merge first)'}`);
+          }
+        } catch (err: any) {
+          console.log(`(error) ${err.message}`);
+        } finally {
+          transport.close();
+        }
       }
       return;
     }
@@ -498,24 +537,49 @@ async function dispatch(repo: Repository, cmd: string, args: string[]): Promise<
       const url = await repo.refStore.getRef(`refs/remotes/${remoteName}/url`);
       if (!url) { console.log(`(error) remote '${remoteName}' not found. Use REMOTE ADD first.`); return; }
 
-      const { WebSocketClientTransport } = await import('../sync/ws-client.js');
-      const { RemoteSyncClient } = await import('../sync/protocol.js');
-      const transport = new WebSocketClientTransport(url);
-      try {
-        await transport.connect();
-        const client = new RemoteSyncClient(repo, transport);
-        const result = await client.pull(branch);
-        if (result.status === 'ok') {
-          console.log(`Pulled ${branch} from ${remoteName}`);
-        } else if (result.status === 'up-to-date') {
+      if (isHttpUrl(url)) {
+        const { httpPull } = await import('../sync/http-client.js');
+        const { decodeBlockData } = await import('../sync/transport.js');
+
+        const localHash = await repo.refStore.getRef(`refs/heads/${branch}`);
+        const response = await httpPull(url, branch, localHash);
+
+        if (response.status === 'up-to-date') {
           console.log('Already in sync');
         } else {
-          console.log(`Pull status: ${result.status}`);
+          // Decode and apply blocks
+          const decoded = response.blocks.map((b: any) => ({ hash: b.hash, data: decodeBlockData(b.data) }));
+          if (decoded.length > 0) {
+            await repo.blockStore.putBatch(decoded);
+          }
+          if (response.status === 'ok' && response.commitHash) {
+            await repo.refStore.setRef(`refs/heads/${branch}`, response.commitHash);
+            await repo.refStore.deleteRef(`refs/working/${branch}`);
+            console.log(`Pulled ${branch} from ${remoteName}`);
+          } else {
+            console.log(`Pull status: ${response.status}`);
+          }
         }
-      } catch (err: any) {
-        console.log(`(error) ${err.message}`);
-      } finally {
-        transport.close();
+      } else {
+        const { WebSocketClientTransport } = await import('../sync/ws-client.js');
+        const { RemoteSyncClient } = await import('../sync/protocol.js');
+        const transport = new WebSocketClientTransport(url);
+        try {
+          await transport.connect();
+          const client = new RemoteSyncClient(repo, transport);
+          const result = await client.pull(branch);
+          if (result.status === 'ok') {
+            console.log(`Pulled ${branch} from ${remoteName}`);
+          } else if (result.status === 'up-to-date') {
+            console.log('Already in sync');
+          } else {
+            console.log(`Pull status: ${result.status}`);
+          }
+        } catch (err: any) {
+          console.log(`(error) ${err.message}`);
+        } finally {
+          transport.close();
+        }
       }
       return;
     }

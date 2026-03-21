@@ -14,6 +14,7 @@ export type { SyncTransport, SyncMessage, RefAdvertiseMessage, BlockRequestMessa
 export { RemoteSyncServer, RemoteSyncClient } from './protocol.js';
 export { handleRefs, handlePush, handlePull, handleBlockRequest } from './handlers.js';
 export { WebSocketClientTransport } from './ws-client.js';
+export { httpClone, httpPush, httpPull } from './http-client.js';
 export { RemoteRepository } from './remote-repo.js';
 
 // ── Types ─────────────────────────────────────────────────────
