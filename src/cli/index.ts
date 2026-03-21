@@ -7,6 +7,7 @@ import { openSqliteStore } from '../store/sqlite.js';
 import { SchemaRegistry, EntityStore } from '../../packages/rit-schema/src/index.js';
 import { ModuleSchema, FunctionSchema, TypeDefSchema, VariableSchema } from '../../packages/rit-sync/src/schemas.js';
 import { typescriptPlugin } from '../../packages/rit-sync/src/plugins/typescript.js';
+import { jsonPlugin, JsonFileSchema } from '../../packages/rit-sync/src/plugins/json.js';
 import { FileIngester } from '../../packages/rit-sync/src/ingester.js';
 
 /**
@@ -395,36 +396,42 @@ async function dispatch(repo: Repository, cmd: string, args: string[]): Promise<
       registry.register(FunctionSchema);
       registry.register(TypeDefSchema);
       registry.register(VariableSchema);
+      registry.register(JsonFileSchema);
       const entityStore = new EntityStore(repo, registry);
       const ingester = new FileIngester(entityStore);
 
-      // Collect source files recursively (.ts, .tsx, .js, .jsx)
+      // Collect source files recursively
       const sourceExts = ['.ts', '.tsx', '.js', '.jsx'];
+      const jsonExts = ['.json'];
       const testSuffixes = ['.d.ts', '.spec.ts', '.test.ts', '.spec.js', '.test.js'];
-      function collectSourceFiles(d: string): string[] {
-        const files: string[] = [];
+      const tsFiles: string[] = [];
+      const jsonFiles: string[] = [];
+      function collectFiles(d: string): void {
         for (const entry of readdirSync(d)) {
           const full = join(d, entry);
           const stat = statSync(full);
           if (stat.isDirectory()) {
             if (entry === 'node_modules' || entry === '__tests__' || entry === 'test' || entry === 'dist') continue;
-            files.push(...collectSourceFiles(full));
+            collectFiles(full);
           } else if (sourceExts.some(ext => entry.endsWith(ext)) && !testSuffixes.some(suf => entry.endsWith(suf))) {
-            files.push(full);
+            tsFiles.push(full);
+          } else if (jsonExts.some(ext => entry.endsWith(ext)) && entry !== 'bun.lock') {
+            jsonFiles.push(full);
           }
         }
-        return files;
       }
+      collectFiles(dir);
 
-      const tsFiles = collectSourceFiles(dir);
-      if (tsFiles.length === 0) { console.log('(error) no source files found'); return; }
+      if (tsFiles.length === 0 && jsonFiles.length === 0) { console.log('(error) no source files found'); return; }
 
       let ingested = 0;
       let failed = 0;
       let fnCount = 0;
       let typeCount = 0;
       let varCount = 0;
+      let jsonCount = 0;
 
+      // Ingest TypeScript/JavaScript files
       for (const file of tsFiles) {
         const modulePath = relative(dir, file).replace(/\.(tsx?|jsx?)$/, '').replace(/\\/g, '/');
         const source = readFileSync(file, 'utf-8');
@@ -445,13 +452,30 @@ async function dispatch(repo: Repository, cmd: string, args: string[]): Promise<
         }
       }
 
+      // Ingest JSON files
+      for (const file of jsonFiles) {
+        const jsonPath = relative(dir, file).replace(/\\/g, '/');
+        const source = readFileSync(file, 'utf-8');
+
+        try {
+          await ingester.ingestSource(source, jsonPath, jsonPlugin);
+          ingested++;
+          jsonCount++;
+          console.log(`  OK: ${jsonPath} (json)`);
+        } catch (err: unknown) {
+          failed++;
+          const msg = err instanceof Error ? err.message : String(err);
+          console.log(`  FAIL: ${jsonPath} — ${msg}`);
+        }
+      }
+
       // Commit
       const msg = commitMessage ?? `Ingest ${ingested} files from ${dir}`;
       const db = repo.data();
       const hash = await repo.commit(msg, db);
 
       console.log(`\nIngested: ${ingested} files (${failed} failed)`);
-      console.log(`Entities: ${ingested} modules, ${fnCount} functions, ${typeCount} types, ${varCount} variables`);
+      console.log(`Entities: ${ingested - jsonCount} modules, ${fnCount} functions, ${typeCount} types, ${varCount} variables, ${jsonCount} json`);
       console.log(`Committed: ${hash}`);
       return;
     }
