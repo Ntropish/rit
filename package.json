@@ -12,6 +12,7 @@
     "./packages/rit-sync/src/schemas.js": "./packages/rit-sync/src/schemas.ts",
     "./packages/rit-sync/src/html-schemas.js": "./packages/rit-sync/src/html-schemas.ts",
     "./packages/rit-sync/src/ci-schemas.js": "./packages/rit-sync/src/ci-schemas.ts",
+    "./packages/rit-sync/src/index.js": "./packages/rit-sync/src/index.ts",
     "./src/sync/handlers.js": "./src/sync/handlers.ts"
   },
   "bin": {
