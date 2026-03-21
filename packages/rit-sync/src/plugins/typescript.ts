@@ -233,6 +233,24 @@ export const typescriptPlugin: LanguagePlugin = {
           });
           order++;
         }
+      } else if (Node.isExpressionStatement(statement) || Node.isExportDeclaration(statement)) {
+        // Skip export declarations (handled separately via exportDeclarations)
+        if (Node.isExportDeclaration(statement)) continue;
+
+        // Top-level expression statements (e.g. createRoot(...).render(...), process.on(...))
+        const text = statement.getText();
+        writes.push({
+          schema: VariableSchema,
+          data: {
+            module: moduleKey,
+            name: `__expr_${order}__`,
+            exported: false,
+            declarationKind: 'expression',
+            initializer: text.replace(/;$/, ''),
+            order,
+          },
+        });
+        order++;
       }
     }
 
@@ -288,6 +306,9 @@ export const typescriptPlugin: LanguagePlugin = {
         if (declKind === 'default') {
           // export default <expression>
           lines.push(`export default ${init};`);
+        } else if (declKind === 'expression') {
+          // Top-level expression statement
+          lines.push(`${init};`);
         } else {
           const exportKw = d.isDefault ? 'export default ' : d.exported ? 'export ' : '';
           const typeAnn = d.typeAnnotation ? `: ${d.typeAnnotation}` : '';
