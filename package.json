@@ -6,6 +6,16 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "browser": "src/browser.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./src/store/sqlite.js": "./src/store/sqlite.ts",
+    "./packages/rit-schema/src/index.js": "./packages/rit-schema/src/index.ts",
+    "./packages/rit-sync/src/schemas.js": "./packages/rit-sync/src/schemas.ts",
+    "./packages/rit-sync/src/html-schemas.js": "./packages/rit-sync/src/html-schemas.ts"
+  },
   "bin": {
     "rit": "src/cli/index.ts"
   },
