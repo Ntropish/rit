@@ -4,6 +4,10 @@ import { Repository } from '../repo/index.js';
 import { decodeBlockData, encodeBlockData } from './transport.js';
 import type { RefAdvertiseMessage, PullResponseMessage, PushAckMessage } from './transport.js';
 
+export interface HttpSyncOptions {
+  headers?: Record<string, string>;
+}
+
 /**
  * Clone a remote repo via HTTP endpoints.
  * GET /info/refs to discover branches, then POST /pull for each.
@@ -12,9 +16,12 @@ export async function httpClone(
   baseUrl: string,
   localStore: Store,
   localRefs: RefStore,
+  options?: HttpSyncOptions,
 ): Promise<Repository> {
+  const extraHeaders = options?.headers ?? {};
+
   // Discover branches
-  const refsRes = await fetch(`${baseUrl}/info/refs`);
+  const refsRes = await fetch(`${baseUrl}/info/refs`, { headers: extraHeaders });
   if (!refsRes.ok) throw new Error(`Failed to fetch refs: ${refsRes.status}`);
   const refsBody = await refsRes.json() as RefAdvertiseMessage;
 
@@ -22,7 +29,7 @@ export async function httpClone(
   for (const branch of Object.keys(refsBody.branches)) {
     const pullRes = await fetch(`${baseUrl}/pull`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...extraHeaders },
       body: JSON.stringify({ type: 'pull-request', branch, localHash: null }),
     });
     if (!pullRes.ok) throw new Error(`Failed to pull branch ${branch}: ${pullRes.status}`);
@@ -52,10 +59,12 @@ export async function httpPush(
   branch: string,
   commitHash: Hash,
   blocks: Array<{ hash: string; data: string }>,
+  options?: HttpSyncOptions,
 ): Promise<{ accepted: boolean; reason?: string }> {
+  const extraHeaders = options?.headers ?? {};
   const res = await fetch(`${baseUrl}/push`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...extraHeaders },
     body: JSON.stringify({ type: 'push', branch, commitHash, blocks }),
   });
   if (!res.ok) throw new Error(`Push failed: ${res.status}`);
@@ -72,10 +81,12 @@ export async function httpPull(
   baseUrl: string,
   branch: string,
   localHash: Hash | null,
+  options?: HttpSyncOptions,
 ): Promise<PullResponseMessage> {
+  const extraHeaders = options?.headers ?? {};
   const res = await fetch(`${baseUrl}/pull`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...extraHeaders },
     body: JSON.stringify({ type: 'pull-request', branch, localHash }),
   });
   if (!res.ok) throw new Error(`Pull failed: ${res.status}`);

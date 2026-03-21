@@ -44,7 +44,10 @@ if (process.argv[2]?.toUpperCase() === 'CLONE') {
   try {
     if (isHttpUrl(remoteUrl)) {
       const { httpClone } = await import('../sync/http-client.js');
-      await httpClone(remoteUrl, cloneStore, cloneRefs);
+      const httpOptions = process.env.RIT_AUTH_TOKEN
+        ? { headers: { 'Authorization': `Bearer ${process.env.RIT_AUTH_TOKEN}` } }
+        : undefined;
+      await httpClone(remoteUrl, cloneStore, cloneRefs, httpOptions);
     } else {
       const { RemoteRepository } = await import('../sync/remote-repo.js');
       const remote = await RemoteRepository.clone(remoteUrl, cloneStore, cloneRefs);
@@ -489,8 +492,13 @@ async function dispatch(repo: Repository, cmd: string, args: string[]): Promise<
         const localHash = await repo.refStore.getRef(`refs/heads/${branch}`);
         if (!localHash) { console.log(`(error) branch '${branch}' not found`); return; }
 
+        // Auth headers from RIT_AUTH_TOKEN env var
+        const httpOptions = process.env.RIT_AUTH_TOKEN
+          ? { headers: { 'Authorization': `Bearer ${process.env.RIT_AUTH_TOKEN}` } }
+          : undefined;
+
         // Get server's current hash for this branch
-        const refsRes = await fetch(`${url}/info/refs`);
+        const refsRes = await fetch(`${url}/info/refs`, { headers: httpOptions?.headers });
         const refsBody = await refsRes.json() as any;
         const serverHash = refsBody.branches?.[branch] ?? null;
 
@@ -503,7 +511,7 @@ async function dispatch(repo: Repository, cmd: string, args: string[]): Promise<
         const allBlocks = [...commitBlocks, ...treeBlocks];
         const encoded = allBlocks.map(b => ({ hash: b.hash, data: encodeBlockData(b.data) }));
 
-        const result = await httpPush(url, branch, localHash, encoded);
+        const result = await httpPush(url, branch, localHash, encoded, httpOptions);
         if (result.accepted) {
           console.log(`Pushed ${branch} to ${remoteName}`);
         } else {
@@ -541,8 +549,12 @@ async function dispatch(repo: Repository, cmd: string, args: string[]): Promise<
         const { httpPull } = await import('../sync/http-client.js');
         const { decodeBlockData } = await import('../sync/transport.js');
 
+        const httpOptions = process.env.RIT_AUTH_TOKEN
+          ? { headers: { 'Authorization': `Bearer ${process.env.RIT_AUTH_TOKEN}` } }
+          : undefined;
+
         const localHash = await repo.refStore.getRef(`refs/heads/${branch}`);
-        const response = await httpPull(url, branch, localHash);
+        const response = await httpPull(url, branch, localHash, httpOptions);
 
         if (response.status === 'up-to-date') {
           console.log('Already in sync');
