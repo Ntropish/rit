@@ -9,6 +9,7 @@ import {
   type RefAdvertiseMessage, type PushMessage,
   type PullRequestMessage, type BlockRequestMessage,
 } from './transport.js';
+import { handleRefs, handlePush, handlePull, handleBlockRequest } from './handlers.js';
 
 // ── RemoteSyncServer ──────────────────────────────────────────
 
@@ -32,146 +33,37 @@ export class RemoteSyncServer {
       case 'ref-advertise':
         return this.handleRefAdvertise();
       case 'push':
-        return this.handlePush(msg);
+        return this.handlePushMsg(msg);
       case 'pull-request':
         return this.handlePullRequest(msg);
       case 'block-request':
-        return this.handleBlockRequest(msg);
+        return this.handleBlockReq(msg);
     }
   }
 
   private async handleRefAdvertise(): Promise<void> {
-    const ad = await advertiseRefs(this.repo.refStore);
-    await this.transport.send({ type: 'ref-advertise', branches: ad.branches });
+    const response = await handleRefs(this.repo);
+    await this.transport.send(response);
   }
 
-  private async handlePush(msg: PushMessage): Promise<void> {
-    const { branch, commitHash, blocks } = msg;
-
-    // Decode and apply blocks
-    const decoded = blocks.map(b => ({ hash: b.hash, data: decodeBlockData(b.data) }));
-    if (decoded.length > 0) {
-      await this.repo.blockStore.putBatch(decoded);
-    }
-
-    // Check if push is valid (not diverged)
-    const localHash = await this.repo.refStore.getRef(`refs/heads/${branch}`);
-    if (localHash && localHash !== commitHash) {
-      const canPush = await isAncestor(this.repo.commitGraph, localHash, commitHash);
-      if (!canPush) {
-        await this.transport.send({
-          type: 'push-ack',
-          branch,
-          accepted: false,
-          reason: 'diverged: remote branch has commits not in pushed history',
-        });
-        return;
-      }
-    }
-
-    // Update ref and clear working ref
-    await this.repo.refStore.setRef(`refs/heads/${branch}`, commitHash);
-    await this.repo.refStore.deleteRef(`refs/working/${branch}`);
-
-    await this.transport.send({ type: 'push-ack', branch, accepted: true });
+  private async handlePushMsg(msg: PushMessage): Promise<void> {
+    const ack = await handlePush(this.repo, msg);
+    await this.transport.send(ack);
 
     // Notify branch updated (pass through the encoded blocks for broadcast)
-    if (this.branchUpdatedCallback) {
-      this.branchUpdatedCallback(branch, commitHash, blocks);
+    if (ack.accepted && this.branchUpdatedCallback) {
+      this.branchUpdatedCallback(msg.branch, msg.commitHash, msg.blocks);
     }
   }
 
   private async handlePullRequest(msg: PullRequestMessage): Promise<void> {
-    const { branch, localHash } = msg;
-    const serverHash = await this.repo.refStore.getRef(`refs/heads/${branch}`);
-
-    if (!serverHash) {
-      await this.transport.send({
-        type: 'pull-response',
-        branch,
-        commitHash: null,
-        blocks: [],
-        status: 'up-to-date',
-      });
-      return;
-    }
-
-    if (serverHash === localHash) {
-      await this.transport.send({
-        type: 'pull-response',
-        branch,
-        commitHash: serverHash,
-        blocks: [],
-        status: 'up-to-date',
-      });
-      return;
-    }
-
-    // Check for divergence
-    if (localHash) {
-      const localIsAncestor = await isAncestor(this.repo.commitGraph, localHash, serverHash);
-      if (!localIsAncestor) {
-        // Diverged: still send blocks so client can merge
-        const commitBlocks = await collectCommitBlocks(
-          this.repo.blockStore, this.repo.commitGraph, serverHash, null,
-        );
-        const serverCommit = await this.repo.commitGraph.getCommit(serverHash);
-        const treeBlocks = await collectMissingBlocks(
-          this.repo.blockStore, serverCommit?.treeHash ?? null, null,
-        );
-        const allBlocks = [...commitBlocks, ...treeBlocks];
-        const encoded = allBlocks.map(b => ({ hash: b.hash, data: encodeBlockData(b.data) }));
-
-        await this.transport.send({
-          type: 'pull-response',
-          branch,
-          commitHash: serverHash,
-          blocks: encoded,
-          status: 'diverged',
-        });
-        return;
-      }
-    }
-
-    // Normal pull: collect only missing blocks
-    const commitBlocks = await collectCommitBlocks(
-      this.repo.blockStore, this.repo.commitGraph, serverHash, localHash,
-    );
-
-    let serverTreeHash: Hash | null = null;
-    let clientTreeHash: Hash | null = null;
-    const serverCommit = await this.repo.commitGraph.getCommit(serverHash);
-    serverTreeHash = serverCommit?.treeHash ?? null;
-    if (localHash) {
-      const clientCommit = await this.repo.commitGraph.getCommit(localHash);
-      clientTreeHash = clientCommit?.treeHash ?? null;
-    }
-
-    const treeBlocks = await collectMissingBlocks(
-      this.repo.blockStore, serverTreeHash, clientTreeHash,
-    );
-
-    const allBlocks = [...commitBlocks, ...treeBlocks];
-    const encoded = allBlocks.map(b => ({ hash: b.hash, data: encodeBlockData(b.data) }));
-
-    await this.transport.send({
-      type: 'pull-response',
-      branch,
-      commitHash: serverHash,
-      blocks: encoded,
-      status: 'ok',
-    });
+    const response = await handlePull(this.repo, msg);
+    await this.transport.send(response);
   }
 
-  private async handleBlockRequest(msg: BlockRequestMessage): Promise<void> {
-    const blocks: Array<{ hash: string; data: string }> = [];
-    for (const hash of msg.hashes) {
-      const data = await this.repo.blockStore.get(hash);
-      if (data) {
-        blocks.push({ hash, data: encodeBlockData(data) });
-      }
-    }
-    await this.transport.send({ type: 'block-response', blocks });
+  private async handleBlockReq(msg: BlockRequestMessage): Promise<void> {
+    const response = await handleBlockRequest(this.repo, msg);
+    await this.transport.send(response);
   }
 }
 

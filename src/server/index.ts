@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { Repository } from '../repo/index.js';
 import { openSqliteStore } from '../store/sqlite.js';
 import { RemoteSyncServer } from '../sync/protocol.js';
+import { handleRefs, handlePush, handlePull, handleBlockRequest } from '../sync/handlers.js';
 import { type BranchUpdatedMessage } from '../sync/transport.js';
 import { WebSocketTransport } from './ws-transport.js';
 
@@ -38,6 +39,42 @@ export function createRitServer(repo: Repository, options?: RitServerOptions): R
         const upgraded = server.upgrade(req, { data: {} });
         if (upgraded) return undefined as any;
         return new Response('WebSocket upgrade failed', { status: 400 });
+      }
+
+      // HTTP sync endpoints
+      if (req.method === 'GET' && url.pathname === '/info/refs') {
+        const response = await handleRefs(repo);
+        return Response.json(response);
+      }
+
+      if (req.method === 'POST' && url.pathname === '/push') {
+        const msg = await req.json();
+        const ack = await handlePush(repo, msg);
+        // Broadcast to WS clients on successful push
+        if (ack.accepted) {
+          const message: BranchUpdatedMessage = {
+            type: 'branch-updated',
+            branch: msg.branch,
+            commitHash: msg.commitHash,
+            blocks: msg.blocks,
+          };
+          for (const [, state] of clients) {
+            state.transport.send(message);
+          }
+        }
+        return Response.json(ack);
+      }
+
+      if (req.method === 'POST' && url.pathname === '/pull') {
+        const msg = await req.json();
+        const response = await handlePull(repo, msg);
+        return Response.json(response);
+      }
+
+      if (req.method === 'POST' && url.pathname === '/blocks') {
+        const msg = await req.json();
+        const response = await handleBlockRequest(repo, msg);
+        return Response.json(response);
       }
 
       return new Response('Not found', { status: 404 });
@@ -141,11 +178,11 @@ export function createMultiRepoServer(reposDir: string, options?: RitServerOptio
     }
   }
 
-  // Parse repo name from path: /repos/:name/ws
-  function parseRepoName(pathname: string): string | null {
-    const match = pathname.match(/^\/repos\/([^/]+)\/ws$/);
+  // Parse repo name and rest from path: /repos/:name/...
+  function parseRepoPath(pathname: string): { name: string; rest: string } | null {
+    const match = pathname.match(/^\/repos\/([^/]+)(\/.*)?$/);
     if (!match) return null;
-    return match[1];
+    return { name: match[1], rest: match[2] ?? '' };
   }
 
   const server = Bun.serve({
@@ -155,12 +192,63 @@ export function createMultiRepoServer(reposDir: string, options?: RitServerOptio
     async fetch(req, server) {
       const url = new URL(req.url);
 
+      const parsed = parseRepoPath(url.pathname);
+      if (!parsed) return new Response('Not found', { status: 404 });
+
+      const { name, rest } = parsed;
+
       // WebSocket upgrade: /repos/:name/ws
-      const repoName = parseRepoName(url.pathname);
-      if (repoName) {
-        const upgraded = server.upgrade(req, { data: { repoName } });
+      if (rest === '/ws') {
+        const upgraded = server.upgrade(req, { data: { repoName: name } });
         if (upgraded) return undefined as any;
         return new Response('WebSocket upgrade failed', { status: 400 });
+      }
+
+      // HTTP sync endpoints
+      if (req.method === 'GET' && rest === '/info/refs') {
+        const repo = await getRepo(name);
+        if (!repo) return new Response('Repo not found', { status: 404 });
+        const response = await handleRefs(repo);
+        return Response.json(response);
+      }
+
+      if (req.method === 'POST' && rest === '/push') {
+        const repo = await getRepo(name);
+        if (!repo) return new Response('Repo not found', { status: 404 });
+        const msg = await req.json();
+        const ack = await handlePush(repo, msg);
+        // Broadcast to WS clients on successful push
+        if (ack.accepted) {
+          const entry = repoCache.get(name);
+          if (entry) {
+            const message: BranchUpdatedMessage = {
+              type: 'branch-updated',
+              branch: msg.branch,
+              commitHash: msg.commitHash,
+              blocks: msg.blocks,
+            };
+            for (const [, state] of entry.clients) {
+              state.transport.send(message);
+            }
+          }
+        }
+        return Response.json(ack);
+      }
+
+      if (req.method === 'POST' && rest === '/pull') {
+        const repo = await getRepo(name);
+        if (!repo) return new Response('Repo not found', { status: 404 });
+        const msg = await req.json();
+        const response = await handlePull(repo, msg);
+        return Response.json(response);
+      }
+
+      if (req.method === 'POST' && rest === '/blocks') {
+        const repo = await getRepo(name);
+        if (!repo) return new Response('Repo not found', { status: 404 });
+        const msg = await req.json();
+        const response = await handleBlockRequest(repo, msg);
+        return Response.json(response);
       }
 
       return new Response('Not found', { status: 404 });
