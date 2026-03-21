@@ -1,6 +1,7 @@
 import type { EntityStore } from '../../../packages/rit-schema/src/index.js';
 import { ModuleSchema, FunctionSchema, TypeDefSchema, VariableSchema } from './schemas.js';
 import { JsonFileSchema } from './plugins/json.js';
+import { RawFileSchema } from './plugins/raw-file.js';
 import type { LanguagePlugin, FileEntities } from './types.js';
 
 export class FileMaterializer {
@@ -55,6 +56,22 @@ export class FileMaterializer {
   /** List all JSON file paths in the store. */
   async listJsonFiles(): Promise<string[]> {
     const entities = await this.entityStore.list(JsonFileSchema);
+    return entities.map(e => e.path as string);
+  }
+
+  /** Materialize a raw file from the entity store. */
+  async materializeRawFile(filePath: string, plugin: LanguagePlugin): Promise<string> {
+    const entity = await this.entityStore.get(RawFileSchema, { path: filePath });
+    if (!entity) {
+      throw new Error(`Raw file '${filePath}' not found in store`);
+    }
+    const entities: FileEntities = { root: entity, children: {} };
+    return plugin.materialize(entities);
+  }
+
+  /** List all raw file paths in the store. */
+  async listRawFiles(): Promise<string[]> {
+    const entities = await this.entityStore.list(RawFileSchema);
     return entities.map(e => e.path as string);
   }
 }
