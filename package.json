@@ -11,6 +11,7 @@
     "./packages/rit-schema/src/index.js": "./packages/rit-schema/src/index.ts",
     "./packages/rit-sync/src/schemas.js": "./packages/rit-sync/src/schemas.ts",
     "./packages/rit-sync/src/html-schemas.js": "./packages/rit-sync/src/html-schemas.ts",
+    "./packages/rit-sync/src/ci-schemas.js": "./packages/rit-sync/src/ci-schemas.ts",
     "./src/sync/handlers.js": "./src/sync/handlers.ts"
   },
   "bin": {
