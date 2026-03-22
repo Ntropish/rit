@@ -8,6 +8,10 @@ import { SchemaRegistry, EntityStore } from '../../packages/rit-schema/src/index
 import { ModuleSchema, FunctionSchema, TypeDefSchema, VariableSchema } from '../../packages/rit-sync/src/schemas.js';
 import { typescriptPlugin } from '../../packages/rit-sync/src/plugins/typescript.js';
 import { jsonPlugin, JsonFileSchema } from '../../packages/rit-sync/src/plugins/json.js';
+import { htmlPlugin } from '../../packages/rit-sync/src/plugins/html.js';
+import { DocumentSchema, ScriptBlockSchema, StyleBlockSchema } from '../../packages/rit-sync/src/html-schemas.js';
+import { cssPlugin } from '../../packages/rit-sync/src/plugins/css.js';
+import { CssFileSchema } from '../../packages/rit-sync/src/css-schemas.js';
 import { FileIngester } from '../../packages/rit-sync/src/ingester.js';
 
 /**
@@ -397,15 +401,23 @@ async function dispatch(repo: Repository, cmd: string, args: string[]): Promise<
       registry.register(TypeDefSchema);
       registry.register(VariableSchema);
       registry.register(JsonFileSchema);
+      registry.register(DocumentSchema);
+      registry.register(ScriptBlockSchema);
+      registry.register(StyleBlockSchema);
+      registry.register(CssFileSchema);
       const entityStore = new EntityStore(repo, registry);
       const ingester = new FileIngester(entityStore);
 
       // Collect source files recursively
       const sourceExts = ['.ts', '.tsx', '.js', '.jsx'];
       const jsonExts = ['.json'];
+      const htmlExts = ['.html', '.htm'];
+      const cssExts = ['.css'];
       const testSuffixes = ['.d.ts', '.spec.ts', '.test.ts', '.spec.js', '.test.js'];
       const tsFiles: string[] = [];
       const jsonFiles: string[] = [];
+      const htmlFiles: string[] = [];
+      const cssFiles: string[] = [];
       function collectFiles(d: string): void {
         for (const entry of readdirSync(d)) {
           const full = join(d, entry);
@@ -417,12 +429,16 @@ async function dispatch(repo: Repository, cmd: string, args: string[]): Promise<
             tsFiles.push(full);
           } else if (jsonExts.some(ext => entry.endsWith(ext)) && entry !== 'bun.lock') {
             jsonFiles.push(full);
+          } else if (htmlExts.some(ext => entry.endsWith(ext))) {
+            htmlFiles.push(full);
+          } else if (cssExts.some(ext => entry.endsWith(ext))) {
+            cssFiles.push(full);
           }
         }
       }
       collectFiles(dir);
 
-      if (tsFiles.length === 0 && jsonFiles.length === 0) { console.log('(error) no source files found'); return; }
+      if (tsFiles.length === 0 && jsonFiles.length === 0 && htmlFiles.length === 0 && cssFiles.length === 0) { console.log('(error) no source files found'); return; }
 
       let ingested = 0;
       let failed = 0;
@@ -430,6 +446,8 @@ async function dispatch(repo: Repository, cmd: string, args: string[]): Promise<
       let typeCount = 0;
       let varCount = 0;
       let jsonCount = 0;
+      let htmlCount = 0;
+      let cssCount = 0;
 
       // Ingest TypeScript/JavaScript files
       for (const file of tsFiles) {
@@ -472,13 +490,47 @@ async function dispatch(repo: Repository, cmd: string, args: string[]): Promise<
         }
       }
 
+      // Ingest HTML files
+      for (const file of htmlFiles) {
+        const htmlPath = relative(dir, file).replace(/\\/g, '/');
+        const source = readFileSync(file, 'utf-8');
+
+        try {
+          await ingester.ingestSource(source, htmlPath, htmlPlugin);
+          ingested++;
+          htmlCount++;
+          console.log(`  OK: ${htmlPath} (html)`);
+        } catch (err: unknown) {
+          failed++;
+          const msg = err instanceof Error ? err.message : String(err);
+          console.log(`  FAIL: ${htmlPath} — ${msg}`);
+        }
+      }
+
+      // Ingest CSS files
+      for (const file of cssFiles) {
+        const cssPath = relative(dir, file).replace(/\\/g, '/');
+        const source = readFileSync(file, 'utf-8');
+
+        try {
+          await ingester.ingestSource(source, cssPath, cssPlugin);
+          ingested++;
+          cssCount++;
+          console.log(`  OK: ${cssPath} (css)`);
+        } catch (err: unknown) {
+          failed++;
+          const msg = err instanceof Error ? err.message : String(err);
+          console.log(`  FAIL: ${cssPath} — ${msg}`);
+        }
+      }
+
       // Commit
       const msg = commitMessage ?? `Ingest ${ingested} files from ${dir}`;
       const db = repo.data();
       const hash = await repo.commit(msg, db);
 
       console.log(`\nIngested: ${ingested} files (${failed} failed)`);
-      console.log(`Entities: ${ingested - jsonCount} modules, ${fnCount} functions, ${typeCount} types, ${varCount} variables, ${jsonCount} json`);
+      console.log(`Entities: ${ingested - jsonCount - htmlCount - cssCount} modules, ${fnCount} functions, ${typeCount} types, ${varCount} variables, ${jsonCount} json, ${htmlCount} html, ${cssCount} css`);
       console.log(`Committed: ${hash}`);
       return;
     }
