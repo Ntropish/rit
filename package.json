@@ -18,6 +18,9 @@
   "bin": {
     "rit": "src/cli/index.ts"
   },
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "build": "tsc",
     "test": "vitest run",

@@ -9,9 +9,6 @@
     "build": "tsc",
     "test": "vitest run"
   },
-  "dependencies": {
-    "rgit": "file:../../"
-  },
   "devDependencies": {
     "typescript": "^5.4.0",
     "vitest": "^1.6.0"

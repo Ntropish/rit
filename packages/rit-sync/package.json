@@ -10,8 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "rgit": "file:../../",
-    "@rit/schema": "file:../rit-schema",
+    "@rit/schema": "^0.0.1",
     "ts-morph": "^24.0.0"
   },
   "devDependencies": {
