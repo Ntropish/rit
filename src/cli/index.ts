@@ -3,6 +3,7 @@ import { createInterface } from 'node:readline';
 import { join, dirname, resolve, relative } from 'node:path';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { Repository } from '../repo/index.js';
+import { RedisDataModel } from '../types/index.js';
 import { openSqliteStore } from '../store/sqlite.js';
 import { SchemaRegistry, EntityStore } from '../../packages/rit-schema/src/index.js';
 import { ModuleSchema, FunctionSchema, TypeDefSchema, VariableSchema } from '../../packages/rit-sync/src/schemas.js';
@@ -364,12 +365,85 @@ async function dispatch(repo: Repository, cmd: string, args: string[]): Promise<
       if (args.length < 1) { console.log('(error) MERGE requires branch name'); return; }
       const result = await repo.merge(args[0]);
       if (result.conflicts.length === 0) {
+        // Clear any stale conflict state
+        await repo.refStore.deleteRef('refs/merge/conflicts');
         console.log(`Merged '${args[0]}' cleanly`);
       } else {
+        // Persist conflicts for later resolution
+        const stored = result.conflicts.map(c => ({
+          key: Buffer.from(c.key).toString('hex'),
+          base: c.base ? Buffer.from(c.base).toString('hex') : null,
+          ours: c.ours ? Buffer.from(c.ours).toString('hex') : null,
+          theirs: c.theirs ? Buffer.from(c.theirs).toString('hex') : null,
+        }));
+        await repo.refStore.setRef('refs/merge/conflicts', JSON.stringify(stored));
         console.log(`Merge has ${result.conflicts.length} conflict(s)`);
-        for (const c of result.conflicts) {
-          console.log(`  conflict: ${Buffer.from(c.key).toString('hex')}`);
+        for (const c of stored) {
+          console.log(`  conflict: ${c.key}`);
         }
+        console.log(`\nUse CONFLICTS to list, RESOLVE <key> --ours|--theirs to resolve.`);
+      }
+      return;
+    }
+
+    case 'CONFLICTS': {
+      const raw = await repo.refStore.getRef('refs/merge/conflicts');
+      if (!raw) { console.log('(no conflicts)'); return; }
+      const conflicts = JSON.parse(raw) as Array<{ key: string; ours: string | null; theirs: string | null }>;
+      if (conflicts.length === 0) { console.log('(no conflicts)'); return; }
+      console.log(`${conflicts.length} conflict(s):`);
+      for (const c of conflicts) {
+        const oursLabel = c.ours ? 'present' : 'deleted';
+        const theirsLabel = c.theirs ? 'present' : 'deleted';
+        console.log(`  ${c.key}  (ours: ${oursLabel}, theirs: ${theirsLabel})`);
+      }
+      return;
+    }
+
+    case 'RESOLVE': {
+      const raw = await repo.refStore.getRef('refs/merge/conflicts');
+      if (!raw) { console.log('(error) no pending conflicts'); return; }
+      let conflicts = JSON.parse(raw) as Array<{ key: string; base: string | null; ours: string | null; theirs: string | null }>;
+      if (conflicts.length === 0) { console.log('(error) no pending conflicts'); return; }
+
+      // Parse flags
+      const resolveAll = args.includes('--all');
+      const useOurs = args.includes('--ours');
+      const useTheirs = args.includes('--theirs');
+      if (!useOurs && !useTheirs) { console.log('(error) RESOLVE requires --ours or --theirs'); return; }
+      if (useOurs && useTheirs) { console.log('(error) cannot use both --ours and --theirs'); return; }
+
+      const keyArg = args.find(a => !a.startsWith('--'));
+
+      if (!resolveAll && !keyArg) { console.log('(error) RESOLVE requires a key or --all'); return; }
+
+      const toResolve = resolveAll ? conflicts : conflicts.filter(c => c.key === keyArg);
+      if (toResolve.length === 0) { console.log('(error) conflict not found for key: ' + keyArg); return; }
+
+      let tree = repo.data().tree;
+      for (const c of toResolve) {
+        const keyBytes = new Uint8Array(Buffer.from(c.key, 'hex'));
+        const chosenHex = useOurs ? c.ours : c.theirs;
+        if (chosenHex) {
+          const valueBytes = new Uint8Array(Buffer.from(chosenHex, 'hex'));
+          tree = await tree.put(keyBytes, valueBytes);
+        } else {
+          tree = await tree.delete(keyBytes);
+        }
+      }
+
+      // Update working tree
+      await repo.setData(new RedisDataModel(tree));
+
+      // Remove resolved conflicts from the list
+      const resolvedKeys = new Set(toResolve.map(c => c.key));
+      conflicts = conflicts.filter(c => !resolvedKeys.has(c.key));
+      if (conflicts.length === 0) {
+        await repo.refStore.deleteRef('refs/merge/conflicts');
+        console.log(`All conflicts resolved. You can now COMMIT.`);
+      } else {
+        await repo.refStore.setRef('refs/merge/conflicts', JSON.stringify(conflicts));
+        console.log(`Resolved ${toResolve.length} conflict(s), ${conflicts.length} remaining.`);
       }
       return;
     }
