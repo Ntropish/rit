@@ -13,7 +13,9 @@
     "./packages/rit-sync/src/html-schemas.js": "./packages/rit-sync/src/html-schemas.ts",
     "./packages/rit-sync/src/ci-schemas.js": "./packages/rit-sync/src/ci-schemas.ts",
     "./packages/rit-sync/src/index.js": "./packages/rit-sync/src/index.ts",
-    "./src/sync/handlers.js": "./src/sync/handlers.ts"
+    "./src/sync/handlers.js": "./src/sync/handlers.ts",
+    "./src/sync/blocks.js": "./src/sync/blocks.ts",
+    "./src/sync/transport.js": "./src/sync/transport.ts"
   },
   "bin": {
     "rit": "src/cli/index.ts"
