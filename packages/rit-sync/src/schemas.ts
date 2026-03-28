@@ -9,6 +9,7 @@ export const ModuleSchema: EntitySchema = {
     imports: { type: 'ref[]', refTarget: 'mod' },
     importDeclarations: { type: 'ref[]' },
     exportDeclarations: { type: 'ref[]' },
+    fileComment: { type: 'string' },
   },
 };
 

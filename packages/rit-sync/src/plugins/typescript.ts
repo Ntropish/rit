@@ -29,16 +29,28 @@ export const typescriptPlugin: LanguagePlugin = {
     // Collect imports
     const importPaths: string[] = [];
     const importDeclarations: string[] = [];
-    for (const imp of sourceFile.getImportDeclarations()) {
+    const imports = sourceFile.getImportDeclarations();
+    for (const imp of imports) {
       const specifier = imp.getModuleSpecifierValue();
       importPaths.push(`mod:${specifier}`);
       importDeclarations.push(imp.getText());
     }
 
-    // Collect re-export declarations
+    // Collect re-export declarations (for module metadata only)
     const exportDeclarations: string[] = [];
     for (const exp of sourceFile.getExportDeclarations()) {
       exportDeclarations.push(exp.getText());
+    }
+
+    // Capture file-level comments (leading trivia before first statement)
+    const statements = sourceFile.getStatements();
+    let fileComment: string | undefined;
+    if (statements.length > 0) {
+      const firstStatement = statements[0];
+      const ranges = firstStatement.getLeadingCommentRanges();
+      if (ranges.length > 0) {
+        fileComment = ranges.map(r => r.getText()).join('\n');
+      }
     }
 
     // Module entity
@@ -49,15 +61,45 @@ export const typescriptPlugin: LanguagePlugin = {
         imports: importPaths,
         importDeclarations,
         ...(exportDeclarations.length > 0 ? { exportDeclarations } : {}),
+        ...(fileComment ? { fileComment } : {}),
       },
     });
 
     // Track declaration order across all top-level items
     let order = 0;
+    // Track which statements had file-level comments captured (to avoid duplication)
+    const firstStatementPos = statements.length > 0 ? statements[0].getStart() : -1;
 
     for (const statement of sourceFile.getStatements()) {
       // Skip import declarations (already handled)
       if (Node.isImportDeclaration(statement)) continue;
+
+      // Capture leading comments for non-import statements
+      // Skip if this is the first statement (file-level comments already captured on module)
+      if (statement.getStart() !== firstStatementPos) {
+        const commentRanges = statement.getLeadingCommentRanges();
+        if (commentRanges.length > 0) {
+          // For function declarations, skip JSDoc comments (captured in jsdoc field)
+          const isFunction = Node.isFunctionDeclaration(statement);
+          const comments = commentRanges
+            .filter(r => !(isFunction && r.getText().startsWith('/**')))
+            .map(r => r.getText());
+          if (comments.length > 0) {
+            writes.push({
+              schema: VariableSchema,
+              data: {
+                module: moduleKey,
+                name: `__comment_${order}__`,
+                exported: false,
+                declarationKind: 'comment',
+                initializer: comments.join('\n'),
+                order,
+              },
+            });
+            order++;
+          }
+        }
+      }
 
       if (Node.isFunctionDeclaration(statement)) {
         const name = statement.getName();
@@ -233,10 +275,22 @@ export const typescriptPlugin: LanguagePlugin = {
           });
           order++;
         }
-      } else if (Node.isExpressionStatement(statement) || Node.isExportDeclaration(statement)) {
-        // Skip export declarations (handled separately via exportDeclarations)
-        if (Node.isExportDeclaration(statement)) continue;
-
+      } else if (Node.isExportDeclaration(statement)) {
+        // Re-export declarations (e.g. export { Foo } from './bar')
+        // Store as ordered entities to preserve position
+        writes.push({
+          schema: VariableSchema,
+          data: {
+            module: moduleKey,
+            name: `__reexport_${order}__`,
+            exported: true,
+            declarationKind: 'reexport',
+            initializer: statement.getText().replace(/;$/, ''),
+            order,
+          },
+        });
+        order++;
+      } else if (Node.isExpressionStatement(statement)) {
         // Top-level expression statements (e.g. createRoot(...).render(...), process.on(...))
         const text = statement.getText();
         writes.push({
@@ -259,6 +313,12 @@ export const typescriptPlugin: LanguagePlugin = {
 
   materialize(entities: FileEntities): string {
     const lines: string[] = [];
+
+    // File-level comments (before imports)
+    const fileComment = entities.root.fileComment as string | undefined;
+    if (fileComment) {
+      lines.push(fileComment);
+    }
 
     // Imports from root entity
     const importDecls = entities.root.importDeclarations as string[] | undefined;
@@ -303,18 +363,27 @@ export const typescriptPlugin: LanguagePlugin = {
         const declKind = d.declarationKind as string;
         const init = d.initializer as string;
 
-        if (declKind === 'default') {
+        if (declKind === 'comment') {
+          // Standalone comment — output directly, no trailing blank line
+          lines.push(init);
+        } else if (declKind === 'reexport') {
+          // Re-export declaration — output directly
+          lines.push(`${init};`);
+          lines.push('');
+        } else if (declKind === 'default') {
           // export default <expression>
           lines.push(`export default ${init};`);
+          lines.push('');
         } else if (declKind === 'expression') {
           // Top-level expression statement
           lines.push(`${init};`);
+          lines.push('');
         } else {
           const exportKw = d.isDefault ? 'export default ' : d.exported ? 'export ' : '';
           const typeAnn = d.typeAnnotation ? `: ${d.typeAnnotation}` : '';
           lines.push(`${exportKw}${declKind} ${d.name}${typeAnn} = ${init};`);
+          lines.push('');
         }
-        lines.push('');
       } else {
         const d = decl.data;
         const exportKw = d.isDefault ? 'export default ' : d.exported ? 'export ' : '';
@@ -336,9 +405,12 @@ export const typescriptPlugin: LanguagePlugin = {
       }
     }
 
-    // Export declarations (re-exports)
+    // Export declarations fallback (for stores without ordered reexport entities)
     const exportDecls = entities.root.exportDeclarations as string[] | undefined;
-    if (exportDecls && exportDecls.length > 0) {
+    const hasReexportEntities = (entities.children['var'] ?? []).some(
+      v => (v.declarationKind as string) === 'reexport'
+    );
+    if (!hasReexportEntities && exportDecls && exportDecls.length > 0) {
       for (const decl of exportDecls) {
         lines.push(decl);
       }
