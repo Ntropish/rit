@@ -15,7 +15,8 @@
     "./packages/rit-sync/src/index.js": "./packages/rit-sync/src/index.ts",
     "./src/sync/handlers.js": "./src/sync/handlers.ts",
     "./src/sync/blocks.js": "./src/sync/blocks.ts",
-    "./src/sync/transport.js": "./src/sync/transport.ts"
+    "./src/sync/transport.js": "./src/sync/transport.ts",
+    "./src/sync/http-client.js": "./src/sync/http-client.ts"
   },
   "bin": {
     "rit": "src/cli/index.ts"
