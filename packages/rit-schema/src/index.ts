@@ -83,6 +83,15 @@ function checkType(
         return { field: name, message: `ref target '${def.refTarget}' is not a registered schema` };
       }
       break;
+    case 'enum':
+      if (typeof value !== 'string') return { field: name, message: `expected string (enum), got ${typeof value}` };
+      if (def.values) {
+        const allowed = def.values.split(',');
+        if (!allowed.includes(value)) {
+          return { field: name, message: `value '${value}' not in allowed values: ${def.values}` };
+        }
+      }
+      break;
   }
   return null;
 }
@@ -225,5 +234,114 @@ export class EntityStore {
     }
 
     return results;
+  }
+}
+
+// ── Schema Hash Storage ────────────────────────────────────
+
+const FIELD_PREFIX = 'field.';
+const SCHEMA_KEY_PREFIX = 'schema:';
+const FIELD_DEF_KEYS: Array<keyof FieldDef> = [
+  'type', 'required', 'refTarget', 'label', 'format', 'min', 'max', 'values', 'default',
+];
+
+/**
+ * Parse a raw hash (from hgetall on a schema:* key) into an EntitySchema.
+ * The hash uses dotted field names: field.name.type, field.name.required, etc.
+ * Top-level keys: description, identity (comma-separated field names).
+ */
+export function parseSchemaHash(
+  prefix: string,
+  hash: Record<string, string>,
+): EntitySchema {
+  const fields: Record<string, FieldDef> = {};
+  const identity = hash.identity ? hash.identity.split(',') : [];
+
+  for (const [key, value] of Object.entries(hash)) {
+    if (!key.startsWith(FIELD_PREFIX)) continue;
+
+    // field.name.type -> ['name', 'type']
+    const rest = key.slice(FIELD_PREFIX.length);
+    const dotIndex = rest.lastIndexOf('.');
+    if (dotIndex === -1) continue;
+
+    const fieldName = rest.slice(0, dotIndex);
+    const prop = rest.slice(dotIndex + 1);
+
+    if (!fields[fieldName]) {
+      fields[fieldName] = { type: 'string' };
+    }
+
+    if (prop === 'required') {
+      fields[fieldName].required = value === 'true';
+    } else if ((FIELD_DEF_KEYS as string[]).includes(prop)) {
+      (fields[fieldName] as any)[prop] = value;
+    }
+  }
+
+  return { prefix, identity, fields };
+}
+
+/**
+ * Serialize an EntitySchema into a flat hash suitable for hset on a schema:* key.
+ */
+export function writeSchemaHash(
+  schema: EntitySchema,
+  description?: string,
+): Record<string, string> {
+  const hash: Record<string, string> = {};
+
+  if (schema.identity.length > 0) {
+    hash.identity = schema.identity.join(',');
+  }
+  if (description) {
+    hash.description = description;
+  }
+
+  for (const [fieldName, def] of Object.entries(schema.fields)) {
+    hash[`${FIELD_PREFIX}${fieldName}.type`] = def.type;
+    if (def.required) hash[`${FIELD_PREFIX}${fieldName}.required`] = 'true';
+    if (def.refTarget) hash[`${FIELD_PREFIX}${fieldName}.refTarget`] = def.refTarget;
+    if (def.label) hash[`${FIELD_PREFIX}${fieldName}.label`] = def.label;
+    if (def.format) hash[`${FIELD_PREFIX}${fieldName}.format`] = def.format;
+    if (def.min) hash[`${FIELD_PREFIX}${fieldName}.min`] = def.min;
+    if (def.max) hash[`${FIELD_PREFIX}${fieldName}.max`] = def.max;
+    if (def.values) hash[`${FIELD_PREFIX}${fieldName}.values`] = def.values;
+    if (def.default) hash[`${FIELD_PREFIX}${fieldName}.default`] = def.default;
+  }
+
+  return hash;
+}
+
+/**
+ * Load all schema:* entities from a repository and register them.
+ * Returns the populated SchemaRegistry.
+ */
+export async function loadSchemas(repo: Repository): Promise<SchemaRegistry> {
+  const registry = new SchemaRegistry();
+
+  for await (const key of repo.keys(`${SCHEMA_KEY_PREFIX}*`)) {
+    const prefix = key.slice(SCHEMA_KEY_PREFIX.length);
+    const hash = await repo.hgetall(key);
+    if (Object.keys(hash).length === 0) continue;
+    const schema = parseSchemaHash(prefix, hash);
+    registry.register(schema);
+  }
+
+  return registry;
+}
+
+/**
+ * Store an EntitySchema as a schema:* hash entity in the repository.
+ */
+export async function storeSchema(
+  repo: Repository,
+  schema: EntitySchema,
+  description?: string,
+): Promise<void> {
+  const key = `${SCHEMA_KEY_PREFIX}${schema.prefix}`;
+  const hash = writeSchemaHash(schema, description);
+  for (const [field, value] of Object.entries(hash)) {
+    await repo.hset(key, field, value);
   }
 }

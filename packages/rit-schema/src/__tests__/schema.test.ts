@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { Repository, MemoryStore } from '../../../../src/index.js';
-import { SchemaRegistry, EntityStore, validate } from '../index.js';
+import { SchemaRegistry, EntityStore, validate, parseSchemaHash, writeSchemaHash, loadSchemas, storeSchema } from '../index.js';
 import type { EntitySchema } from '../types.js';
 
 // ── Test schemas ────────────────────────────────────────────
@@ -272,5 +272,213 @@ describe('EntityStore', () => {
     const raw = await snap.hgetall('mod:utils');
     expect(raw.path).toBe('utils');
     expect(raw.description).toBe('Helpers');
+  });
+});
+
+// ── Schema Hash Storage ────────────────────────────────────
+
+describe('parseSchemaHash', () => {
+  it('parses dotted field names into EntitySchema', () => {
+    const hash: Record<string, string> = {
+      description: 'Internet radio station',
+      identity: 'id',
+      'field.name.type': 'string',
+      'field.name.required': 'true',
+      'field.name.label': 'Station Name',
+      'field.streamUrl.type': 'string',
+      'field.streamUrl.format': 'url',
+      'field.bitrate.type': 'number',
+      'field.bitrate.min': '0',
+      'field.bitrate.max': '320',
+      'field.status.type': 'enum',
+      'field.status.values': 'alive,dead,unknown',
+      'field.status.default': 'unknown',
+      'field.sourceId.type': 'ref',
+      'field.sourceId.refTarget': 'source',
+      'field.tags.type': 'ref[]',
+      'field.tags.refTarget': 'tag',
+    };
+
+    const schema = parseSchemaHash('station', hash);
+
+    expect(schema.prefix).toBe('station');
+    expect(schema.identity).toEqual(['id']);
+    expect(schema.fields.name).toEqual({ type: 'string', required: true, label: 'Station Name' });
+    expect(schema.fields.streamUrl).toEqual({ type: 'string', format: 'url' });
+    expect(schema.fields.bitrate).toEqual({ type: 'number', min: '0', max: '320' });
+    expect(schema.fields.status).toEqual({ type: 'enum', values: 'alive,dead,unknown', default: 'unknown' });
+    expect(schema.fields.sourceId).toEqual({ type: 'ref', refTarget: 'source' });
+    expect(schema.fields.tags).toEqual({ type: 'ref[]', refTarget: 'tag' });
+  });
+
+  it('handles empty identity', () => {
+    const schema = parseSchemaHash('test', { 'field.x.type': 'string' });
+    expect(schema.identity).toEqual([]);
+  });
+
+  it('handles multi-field identity', () => {
+    const schema = parseSchemaHash('test', {
+      identity: 'module,name',
+      'field.module.type': 'ref',
+      'field.module.refTarget': 'mod',
+      'field.name.type': 'string',
+    });
+    expect(schema.identity).toEqual(['module', 'name']);
+  });
+});
+
+describe('writeSchemaHash', () => {
+  it('serializes EntitySchema to dotted hash fields', () => {
+    const schema: EntitySchema = {
+      prefix: 'station',
+      identity: ['id'],
+      fields: {
+        name: { type: 'string', required: true, label: 'Station Name' },
+        bitrate: { type: 'number', min: '0', max: '320' },
+        status: { type: 'enum', values: 'alive,dead,unknown', default: 'unknown' },
+        sourceId: { type: 'ref', refTarget: 'source' },
+      },
+    };
+
+    const hash = writeSchemaHash(schema, 'Internet radio station');
+
+    expect(hash.identity).toBe('id');
+    expect(hash.description).toBe('Internet radio station');
+    expect(hash['field.name.type']).toBe('string');
+    expect(hash['field.name.required']).toBe('true');
+    expect(hash['field.name.label']).toBe('Station Name');
+    expect(hash['field.bitrate.type']).toBe('number');
+    expect(hash['field.bitrate.min']).toBe('0');
+    expect(hash['field.bitrate.max']).toBe('320');
+    expect(hash['field.status.type']).toBe('enum');
+    expect(hash['field.status.values']).toBe('alive,dead,unknown');
+    expect(hash['field.sourceId.type']).toBe('ref');
+    expect(hash['field.sourceId.refTarget']).toBe('source');
+  });
+
+  it('omits falsy optional fields', () => {
+    const schema: EntitySchema = {
+      prefix: 'simple',
+      identity: [],
+      fields: { x: { type: 'string' } },
+    };
+    const hash = writeSchemaHash(schema);
+    expect(hash['field.x.type']).toBe('string');
+    expect(hash['field.x.required']).toBeUndefined();
+    expect(hash['field.x.label']).toBeUndefined();
+    expect(hash.identity).toBeUndefined();
+    expect(hash.description).toBeUndefined();
+  });
+});
+
+describe('parseSchemaHash/writeSchemaHash round-trip', () => {
+  it('round-trips a complex schema', () => {
+    const original: EntitySchema = {
+      prefix: 'station',
+      identity: ['id'],
+      fields: {
+        id: { type: 'string', required: true },
+        name: { type: 'string', required: true, label: 'Station Name' },
+        streamUrl: { type: 'string', format: 'url' },
+        bitrate: { type: 'number', min: '0', max: '320' },
+        status: { type: 'enum', values: 'alive,dead,unknown', default: 'unknown' },
+        sourceId: { type: 'ref', refTarget: 'source' },
+        tags: { type: 'ref[]', refTarget: 'tag' },
+      },
+    };
+
+    const hash = writeSchemaHash(original);
+    const restored = parseSchemaHash('station', hash);
+
+    expect(restored.prefix).toBe(original.prefix);
+    expect(restored.identity).toEqual(original.identity);
+    expect(restored.fields).toEqual(original.fields);
+  });
+});
+
+describe('storeSchema / loadSchemas', () => {
+  let repo: Repository;
+
+  beforeEach(async () => {
+    const memStore = new MemoryStore();
+    repo = await Repository.init(memStore);
+  });
+
+  it('stores and loads a single schema', async () => {
+    const schema: EntitySchema = {
+      prefix: 'station',
+      identity: ['id'],
+      fields: {
+        id: { type: 'string', required: true },
+        name: { type: 'string', required: true, label: 'Station Name' },
+        bitrate: { type: 'number', min: '0' },
+      },
+    };
+
+    await storeSchema(repo, schema, 'Internet radio station');
+    const registry = await loadSchemas(repo);
+
+    const loaded = registry.get('station');
+    expect(loaded).toBeDefined();
+    expect(loaded!.prefix).toBe('station');
+    expect(loaded!.identity).toEqual(['id']);
+    expect(loaded!.fields.id).toEqual({ type: 'string', required: true });
+    expect(loaded!.fields.name).toEqual({ type: 'string', required: true, label: 'Station Name' });
+    expect(loaded!.fields.bitrate).toEqual({ type: 'number', min: '0' });
+  });
+
+  it('loads multiple schemas', async () => {
+    await storeSchema(repo, {
+      prefix: 'station',
+      identity: ['id'],
+      fields: { id: { type: 'string', required: true }, name: { type: 'string' } },
+    });
+    await storeSchema(repo, {
+      prefix: 'source',
+      identity: ['id'],
+      fields: { id: { type: 'string', required: true }, url: { type: 'string', format: 'url' } },
+    });
+    await storeSchema(repo, {
+      prefix: 'tag',
+      identity: ['name'],
+      fields: { name: { type: 'string', required: true } },
+    });
+
+    const registry = await loadSchemas(repo);
+    expect(registry.list()).toHaveLength(3);
+    expect(registry.get('station')).toBeDefined();
+    expect(registry.get('source')).toBeDefined();
+    expect(registry.get('tag')).toBeDefined();
+  });
+
+  it('loaded schemas work with EntityStore', async () => {
+    await storeSchema(repo, {
+      prefix: 'tag',
+      identity: ['name'],
+      fields: { name: { type: 'string', required: true } },
+    });
+
+    const registry = await loadSchemas(repo);
+    const store = new EntityStore(repo, registry);
+    const tagSchema = registry.get('tag')!;
+
+    await store.put(tagSchema, { name: 'jazz' });
+    const result = await store.get(tagSchema, { name: 'jazz' });
+    expect(result).toEqual({ name: 'jazz' });
+  });
+
+  it('schemas survive commit and reload', async () => {
+    await storeSchema(repo, {
+      prefix: 'station',
+      identity: ['id'],
+      fields: { id: { type: 'string', required: true }, name: { type: 'string' } },
+    });
+    await repo.commit('add station schema');
+
+    // Load from committed state
+    const registry = await loadSchemas(repo);
+    const loaded = registry.get('station');
+    expect(loaded).toBeDefined();
+    expect(loaded!.fields.id).toEqual({ type: 'string', required: true });
   });
 });
