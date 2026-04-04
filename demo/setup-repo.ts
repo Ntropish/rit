@@ -13,6 +13,8 @@ import { join } from 'node:path';
 import { httpClone } from '../src/sync/http-client.js';
 import { MemoryStore } from '../src/store/memory.js';
 import { MemoryRefStore } from '../src/commit/index.js';
+import { storeSchema } from '../packages/rit-schema/src/index.js';
+import { componentSchema, routeSchema } from '../src/framework/schemas.js';
 
 const RITCAN_URL = 'https://ritcan.trivorn.org/api/repos/todo';
 const RIT_FILE = join(import.meta.dir, 'framework-demo.rit');
@@ -201,6 +203,11 @@ await repo.hset('todo:2', 'title', 'Test in the browser');
 await repo.hset('todo:2', 'done', 'true');
 await repo.hset('todo:3', 'title', 'Add persistence for user data');
 await repo.hset('todo:3', 'done', 'false');
+
+// ── Store schemas (for RitCan plugin system) ─────────────
+
+await storeSchema(repo, componentSchema, 'UI component with template, style, and props');
+await storeSchema(repo, routeSchema, 'URL-to-component mapping');
 
 // ── Commit and push ───────────────────────────────────────
 
