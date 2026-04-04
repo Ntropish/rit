@@ -11,7 +11,7 @@ import { encodeBlockData } from '../src/sync/transport.js';
 import { existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
-const RITCAN_URL = 'https://ritcan.trivorn.org/api/repos/todo-app';
+const RITCAN_URL = 'https://ritcan.trivorn.org/api/repos/todo-demo';
 const RIT_FILE = join(import.meta.dir, 'framework-demo.rit');
 
 const TOKEN = process.argv[2] || process.env.RIT_TOKEN;
@@ -38,14 +38,13 @@ await repo.hset('component:todo-list', 'template',
     '</header>' +
     '<div class="summary">{smembers("todo:ids").length} todos</div>' +
     '{for(smembers("todo:ids"), id => ' +
-      '<div class="todo-item">' +
-        '<span class="check" onclick={hget("todo:" + id, "done") === "true" ? hset("todo:" + id, "done", "false") : hset("todo:" + id, "done", "true")}>' +
+      '<a href={"/todo/" + id} class="todo-item">' +
+        '<span class="check" onclick={event.preventDefault(); hget("todo:" + id, "done") === "true" ? hset("todo:" + id, "done", "false") : hset("todo:" + id, "done", "true")}>' +
           '{hget("todo:" + id, "done") === "true" ? "✓" : "○"}' +
         '</span>' +
-        '<a href={"/todo/" + id} class="title">{hget("todo:" + id, "title")}</a>' +
-      '</div>' +
+        '<span class="title">{hget("todo:" + id, "title") || "(untitled)"}</span>' +
+      '</a>' +
     ')}' +
-    '{smembers("todo:ids").length === 0 ? "<p class=\\"empty\\">No todos yet. Add one!</p>" : ""}' +
   '</div>'
 );
 await repo.hset('component:todo-list', 'style',
@@ -55,11 +54,10 @@ await repo.hset('component:todo-list', 'style',
   '.add-btn { background: #2563eb; color: white; padding: 0.5rem 1rem; border-radius: 6px; text-decoration: none; } ' +
   '.add-btn:hover { background: #1d4ed8; } ' +
   '.summary { color: #6b7280; margin-bottom: 1rem; font-size: 0.9rem; } ' +
-  '.todo-item { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem; border: 1px solid #e5e7eb; border-radius: 6px; margin-bottom: 0.5rem; } ' +
+  '.todo-item { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem; border: 1px solid #e5e7eb; border-radius: 6px; margin-bottom: 0.5rem; text-decoration: none; color: inherit; cursor: pointer; } ' +
+  '.todo-item:hover { border-color: #2563eb; background: #f8fafc; } ' +
   '.check { cursor: pointer; font-size: 1.2rem; width: 1.5rem; text-align: center; user-select: none; } ' +
-  '.title { flex: 1; color: #1f2937; text-decoration: none; } ' +
-  '.title:hover { color: #2563eb; } ' +
-  '.empty { color: #9ca3af; text-align: center; padding: 2rem; }'
+  '.title { flex: 1; color: #1f2937; }'
 );
 
 // ── Add todo component ────────────────────────────────────
@@ -114,6 +112,14 @@ await repo.hset('component:todo-detail', 'template',
         '? hset("todo:" + hget("route:params", "id"), "done", "false") ' +
         ': hset("todo:" + hget("route:params", "id"), "done", "true")' +
       '}>{hget("todo:" + hget("route:params", "id"), "done") === "true" ? "Mark Pending" : "Mark Done"}</button>' +
+      '<button class="delete-btn" onclick={' +
+        '(function() {' +
+          'var id = hget("route:params", "id");' +
+          'srem("todo:ids", id);' +
+          'del("todo:" + id);' +
+          'navigate("/");' +
+        '})()' +
+      '}>Delete</button>' +
       '<a href="/">Back to list</a>' +
     '</div>' +
   '</div>'
@@ -125,6 +131,8 @@ await repo.hset('component:todo-detail', 'style',
   '.actions { display: flex; gap: 1rem; align-items: center; margin-top: 1rem; } ' +
   'button { padding: 0.5rem 1rem; background: #2563eb; color: white; border: none; border-radius: 6px; cursor: pointer; } ' +
   'button:hover { background: #1d4ed8; } ' +
+  '.delete-btn { background: #ef4444; } ' +
+  '.delete-btn:hover { background: #dc2626; } ' +
   'a { color: #6b7280; text-decoration: none; } ' +
   'a:hover { color: #1f2937; }'
 );
