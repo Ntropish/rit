@@ -12,11 +12,47 @@ export const componentSchema: EntitySchema = {
   identity: ['name'],
   fields: {
     name:     { type: 'string', required: true },
-    template: { type: 'string', required: true, format: 'code:html' },
+    template: { type: 'string', format: 'code:html' },
+    root:     { type: 'string' },
     style:    { type: 'string', format: 'code:css' },
     props:    { type: 'string', format: 'code:json' },
   },
 };
+
+export const nodeSchema: EntitySchema = {
+  prefix: 'node',
+  identity: ['nodeId'],
+  fields: {
+    nodeId:     { type: 'string', required: true },
+    type:       { type: 'enum', required: true, values: 'element,text,expression,for,component-ref' },
+    // Element fields
+    tag:        { type: 'string' },
+    class:      { type: 'string' },
+    style:      { type: 'string' },
+    id:         { type: 'string' },
+    children:   { type: 'string' },
+    // Text field
+    value:      { type: 'string' },
+    // Expression field
+    expr:       { type: 'string', format: 'code:js' },
+    // For fields
+    collection: { type: 'string', format: 'code:js' },
+    variable:   { type: 'string' },
+    body:       { type: 'string' },
+    // Component-ref fields
+    component:  { type: 'ref', refTarget: 'component' },
+    props:      { type: 'string', format: 'code:json' },
+  },
+};
+
+/**
+ * Build a node entity key.
+ * Nodes are namespaced under their owning component:
+ *   component:<componentName>.node:<nodeId>
+ */
+export function nodeKey(componentName: string, nodeId: string): string {
+  return `component:${componentName}.node:${nodeId}`;
+}
 
 export const routeSchema: EntitySchema = {
   prefix: 'route',
@@ -57,6 +93,7 @@ export const configSchema: EntitySchema = {
 /** All framework schemas for bulk registration. */
 export const frameworkSchemas: EntitySchema[] = [
   componentSchema,
+  nodeSchema,
   routeSchema,
   querySchema,
   configSchema,

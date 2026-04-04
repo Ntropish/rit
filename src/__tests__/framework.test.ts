@@ -4,6 +4,8 @@ import { ReactiveStore } from '../reactive/store.js';
 import { SchemaRegistry, validate } from '../../packages/rit-schema/src/index.js';
 import {
   componentSchema,
+  nodeSchema,
+  nodeKey,
   routeSchema,
   querySchema,
   configSchema,
@@ -45,10 +47,10 @@ describe('Framework schemas', () => {
       expect(errors).toContainEqual({ field: 'name', message: 'required field missing' });
     });
 
-    it('rejects missing template', () => {
-      const data = { name: 'broken' };
+    it('accepts component with root instead of template', () => {
+      const data = { name: 'entity-based', root: 'root' };
       const errors = validate(componentSchema, data);
-      expect(errors).toContainEqual({ field: 'template', message: 'required field missing' });
+      expect(errors).toEqual([]);
     });
   });
 
@@ -99,6 +101,88 @@ describe('Framework schemas', () => {
     });
   });
 
+  describe('nodeSchema', () => {
+    it('has correct prefix and identity', () => {
+      expect(nodeSchema.prefix).toBe('node');
+      expect(nodeSchema.identity).toEqual(['nodeId']);
+    });
+
+    it('validates an element node', () => {
+      const data = {
+        nodeId: 'root',
+        type: 'element',
+        tag: 'div',
+        class: 'app',
+        children: 'header,content',
+      };
+      const errors = validate(nodeSchema, data);
+      expect(errors).toEqual([]);
+    });
+
+    it('validates a text node', () => {
+      const data = { nodeId: 'label', type: 'text', value: 'Hello' };
+      const errors = validate(nodeSchema, data);
+      expect(errors).toEqual([]);
+    });
+
+    it('validates an expression node', () => {
+      const data = { nodeId: 'title', type: 'expression', expr: 'get("config:title")' };
+      const errors = validate(nodeSchema, data);
+      expect(errors).toEqual([]);
+    });
+
+    it('validates a for node', () => {
+      const data = {
+        nodeId: 'list',
+        type: 'for',
+        collection: 'smembers("items")',
+        variable: 'item',
+        body: 'item-row',
+      };
+      const errors = validate(nodeSchema, data);
+      expect(errors).toEqual([]);
+    });
+
+    it('validates a component-ref node', () => {
+      const data = {
+        nodeId: 'card',
+        type: 'component-ref',
+        component: 'component:product-card',
+        props: '{"key": "product:1"}',
+      };
+      const errors = validate(nodeSchema, data);
+      expect(errors).toEqual([]);
+    });
+
+    it('rejects invalid node type', () => {
+      const data = { nodeId: 'bad', type: 'unknown' };
+      const errors = validate(nodeSchema, data);
+      expect(errors).toContainEqual({
+        field: 'type',
+        message: expect.stringContaining('not in allowed values'),
+      });
+    });
+
+    it('rejects missing type', () => {
+      const data = { nodeId: 'orphan' };
+      const errors = validate(nodeSchema, data);
+      expect(errors).toContainEqual({ field: 'type', message: 'required field missing' });
+    });
+
+    it('rejects missing nodeId', () => {
+      const data = { type: 'text', value: 'hello' };
+      const errors = validate(nodeSchema, data);
+      expect(errors).toContainEqual({ field: 'nodeId', message: 'required field missing' });
+    });
+  });
+
+  describe('nodeKey', () => {
+    it('builds correct key format', () => {
+      expect(nodeKey('app', 'root')).toBe('component:app.node:root');
+      expect(nodeKey('product-card', 'title-expr')).toBe('component:product-card.node:title-expr');
+    });
+  });
+
   describe('frameworkSchemas', () => {
     it('registers all schemas in a registry', () => {
       const registry = new SchemaRegistry();
@@ -106,17 +190,18 @@ describe('Framework schemas', () => {
         registry.register(schema);
       }
       expect(registry.get('component')).toBe(componentSchema);
+      expect(registry.get('node')).toBe(nodeSchema);
       expect(registry.get('route')).toBe(routeSchema);
       expect(registry.get('query')).toBe(querySchema);
       expect(registry.get('config')).toBe(configSchema);
-      expect(registry.list()).toHaveLength(4);
+      expect(registry.list()).toHaveLength(5);
     });
   });
 });
 
 describe('Component resolver', () => {
   describe('resolveComponent', () => {
-    it('resolves a component from the committed layer', async () => {
+    it('resolves a string-template component from the committed layer', async () => {
       const store = new ReactiveStore();
       await store.hmset('component:product-card', {
         name: 'product-card',
@@ -129,10 +214,34 @@ describe('Component resolver', () => {
       expect(comp).not.toBeNull();
       expect(comp!.name).toBe('product-card');
       expect(comp!.template).toBe('<div class="card">{hget(props.key, "name")}</div>');
+      expect(comp!.root).toBeNull();
       expect(comp!.style).toBe('.card { border: 1px solid #ccc; }');
       expect(comp!.props).toEqual([
         { name: 'key', type: 'string', required: true },
       ]);
+    });
+
+    it('resolves an entity-based component with root', async () => {
+      const store = new ReactiveStore();
+      await store.hmset('component:app', {
+        name: 'app',
+        root: 'root',
+        style: '.app { padding: 1rem; }',
+      });
+
+      const comp = resolveComponent(store, 'app');
+      expect(comp).not.toBeNull();
+      expect(comp!.name).toBe('app');
+      expect(comp!.template).toBeNull();
+      expect(comp!.root).toBe('root');
+      expect(comp!.style).toBe('.app { padding: 1rem; }');
+    });
+
+    it('returns null when component has neither template nor root', async () => {
+      const store = new ReactiveStore();
+      await store.hmset('component:empty', { name: 'empty' });
+
+      expect(resolveComponent(store, 'empty')).toBeNull();
     });
 
     it('returns null for nonexistent component', () => {
@@ -191,7 +300,7 @@ describe('Component resolver', () => {
       const templates: string[] = [];
       const dispose = effect(() => {
         const comp = resolveComponent(store, 'dynamic');
-        if (comp) templates.push(comp.template);
+        if (comp?.template) templates.push(comp.template);
       });
 
       expect(templates).toEqual(['<p>v1</p>']);

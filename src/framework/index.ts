@@ -1,5 +1,7 @@
 export {
   componentSchema,
+  nodeSchema,
+  nodeKey,
   routeSchema,
   querySchema,
   configSchema,
@@ -30,6 +32,19 @@ export {
   type RenderContext,
   type RenderResult,
 } from './renderer.js';
+
+export {
+  renderEntityComponent,
+  renderEntityNode,
+} from './entity-renderer.js';
+
+export {
+  projectTemplate,
+  importTemplate,
+  clearComponentNodes,
+  migrateComponent,
+  migrateAllComponents,
+} from './template-projection.js';
 
 export { loadRepoIntoStore, loadRepoOverlay, commitStoreToRepo } from './bridge.js';
 

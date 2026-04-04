@@ -1,5 +1,5 @@
 /**
- * Reactive renderer: converts template ASTs into live DOM trees.
+ * String-template renderer: converts template ASTs into live DOM trees.
  *
  * Expression nodes are wrapped in effects that re-evaluate when their
  * store dependencies change. Only the affected DOM node updates; there
@@ -11,6 +11,9 @@
  *
  * Style scoping: each component instance gets a `data-rit-<name>`
  * attribute, and its CSS selectors are prefixed accordingly.
+ *
+ * For entity-based components (root instead of template), rendering is
+ * dispatched to the entity-tree renderer automatically.
  */
 
 import type { TemplateNode, ElementNode, ExpressionNode } from './parser.js';
@@ -18,25 +21,18 @@ import { parseTemplate } from './parser.js';
 import { effect } from '../reactive/signals.js';
 import type { ReactiveStore } from '../reactive/store.js';
 import { resolveComponent, type ResolvedComponent } from './resolver.js';
+import { renderEntityComponent } from './entity-renderer.js';
+import {
+  evaluateExpression,
+  scopeSelectors,
+  applyScopedStyle,
+  collectComponentNames,
+  type RenderContext,
+  type RenderResult,
+} from './render-shared.js';
 
-// ── Types ────────────────────────────────────────────────
-
-export interface RenderContext {
-  store: ReactiveStore;
-  props: Record<string, string>;
-  document: Document;
-  /** Set of registered component names. */
-  components: Set<string>;
-  /** Additional variables injected into the expression scope. */
-  extraScope?: Record<string, unknown>;
-}
-
-export interface RenderResult {
-  /** The rendered DOM nodes. */
-  nodes: Node[];
-  /** Dispose all reactive bindings. */
-  dispose: () => void;
-}
+// Re-export shared types and utilities for backwards compatibility
+export { evaluateExpression, scopeSelectors, type RenderContext, type RenderResult } from './render-shared.js';
 
 // ── Public API ───────────────────────────────────────────
 
@@ -56,6 +52,10 @@ export function renderComponent(
   if (!comp) {
     container.textContent = `[unknown component: ${componentName}]`;
     return () => {};
+  }
+
+  if (comp.template === null) {
+    return renderEntityComponent(store, componentName, container, props, doc);
   }
 
   const ast = parseTemplate(comp.template);
@@ -183,6 +183,14 @@ function renderComponentRef(node: ElementNode, ctx: RenderContext): RenderResult
     return { nodes: [placeholder], dispose: () => {} };
   }
 
+  if (comp.template === null) {
+    // Entity-based component: render via entity renderer into a wrapper
+    const wrapper = ctx.document.createElement('span');
+    wrapper.setAttribute(`data-rit-${node.tag}`, '');
+    const dispose = renderEntityComponent(ctx.store, node.tag, wrapper, props, ctx.document);
+    return { nodes: [wrapper], dispose };
+  }
+
   const childAst = parseTemplate(comp.template);
   const childCtx: RenderContext = { ...ctx, props };
 
@@ -290,88 +298,3 @@ function parseForExpression(
   return { items, varName, bodyExpr };
 }
 
-// ── Expression evaluation ────────────────────────────────
-
-/**
- * Evaluate an expression string against the store and props context.
- *
- * Store read functions (get, hget, smembers, etc.) are provided in scope.
- * These reads register signal dependencies when called inside an effect.
- */
-export function evaluateExpression(expr: string, ctx: RenderContext, event?: Event): unknown {
-  const { store, props } = ctx;
-
-  const scope: Record<string, unknown> = {
-    // Reads (synchronous, reactive)
-    get: (key: string) => store.get(key),
-    hget: (key: string, field: string) => store.hget(key, field),
-    hgetall: (key: string) => store.hgetall(key),
-    smembers: (key: string) => store.smembers(key),
-    sismember: (key: string, member: string) => store.sismember(key, member),
-    zrange: (key: string, start: number, stop: number) => store.zrange(key, start, stop),
-    lrange: (key: string, start: number, stop: number) => store.lrange(key, start, stop),
-    llen: (key: string) => store.llen(key),
-    exists: (key: string) => store.exists(key),
-    type: (key: string) => store.type(key),
-
-    // Writes to committed layer (persisted via user repo mirroring)
-    set: (key: string, value: string) => store.set(key, value),
-    hset: (key: string, field: string, value: string) => store.hset(key, field, value),
-    del: (key: string) => store.del(key),
-    sadd: (key: string, ...members: string[]) => store.sadd(key, ...members),
-    srem: (key: string, ...members: string[]) => store.srem(key, ...members),
-
-    // Writes to runtime layer (transient, not persisted)
-    runtimeSet: (key: string, value: string) => store.runtime.set(key, value),
-    runtimeHset: (key: string, field: string, value: string) => store.runtime.hset(key, field, value),
-
-    props,
-    event,
-    ...(ctx.extraScope ?? {}),
-  };
-
-  try {
-    const paramNames = Object.keys(scope);
-    const paramValues = Object.values(scope);
-    const fn = new Function(...paramNames, `return (${expr});`);
-    return fn(...paramValues);
-  } catch {
-    return null;
-  }
-}
-
-// ── Scoped styles ────────────────────────────────────────
-
-function applyScopedStyle(comp: ResolvedComponent, document: Document): HTMLStyleElement {
-  const styleEl = document.createElement('style');
-  const scopeAttr = `data-rit-${comp.name}`;
-  styleEl.textContent = scopeSelectors(comp.style!, scopeAttr);
-  return styleEl;
-}
-
-/**
- * Prefix CSS selectors with a scoping attribute selector.
- * `.card { ... }` -> `[data-rit-product-card] .card { ... }`
- */
-export function scopeSelectors(css: string, scopeAttr: string): string {
-  return css.replace(
-    /([^{}]+)\{/g,
-    (_, selector: string) => {
-      const scoped = selector
-        .split(',')
-        .map(s => `[${scopeAttr}] ${s.trim()}`)
-        .join(', ');
-      return `${scoped} {`;
-    },
-  );
-}
-
-// ── Helpers ──────────────────────────────────────────────
-
-function collectComponentNames(store: ReactiveStore): Set<string> {
-  const names = new Set<string>();
-  for (const key of store.keys('component:*')) {
-    names.add(key.slice('component:'.length));
-  }
-  return names;
-}
