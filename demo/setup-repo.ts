@@ -11,7 +11,7 @@ import { encodeBlockData } from '../src/sync/transport.js';
 import { existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
-const RITCAN_URL = 'https://ritcan.trivorn.org/api/repos/todo-demo';
+const RITCAN_URL = 'https://ritcan.trivorn.org/api/repos/todo-v2';
 const RIT_FILE = join(import.meta.dir, 'framework-demo.rit');
 
 const TOKEN = process.argv[2] || process.env.RIT_TOKEN;
@@ -76,11 +76,11 @@ await repo.hset('component:todo-add', 'template',
           'var title = input.value.trim();' +
           'if (!title) return;' +
           'var id = String(Date.now());' +
-          'hset("todo:" + id, "title", title);' +
-          'hset("todo:" + id, "done", "false");' +
-          'sadd("todo:ids", id);' +
           'input.value = "";' +
-          'navigate("/");' +
+          'hset("todo:" + id, "title", title)' +
+            '.then(function() { return hset("todo:" + id, "done", "false"); })' +
+            '.then(function() { return sadd("todo:ids", id); })' +
+            '.then(function() { navigate("/"); });' +
         '})()' +
       '}>Add</button>' +
       '<a href="/">Cancel</a>' +
