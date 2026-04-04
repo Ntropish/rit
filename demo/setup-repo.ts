@@ -1,19 +1,17 @@
 /**
- * Creates a demo app .rit repo and pushes it to RitCan via HTTP.
+ * Creates a todo list demo app and pushes to RitCan.
  *
- * Usage: bun run demo/setup-repo.ts <auth-token>
+ * Usage: TOKEN=$(trivorn auth token) && bun run demo/setup-repo.ts "$TOKEN"
  */
 
 import { Repository } from '../src/repo/index.js';
 import { openSqliteStore } from '../src/store/sqlite.js';
-import { CommitGraph } from '../src/commit/index.js';
-import { collectCommitBlocks, collectMissingBlocks } from '../src/sync/blocks.js';
-import { encodeBlockData } from '../src/sync/transport.js';
 import { httpPush } from '../src/sync/http-client.js';
+import { encodeBlockData } from '../src/sync/transport.js';
 import { existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
-const RITCAN_URL = 'https://ritcan.trivorn.org/api/repos/framework-demo';
+const RITCAN_URL = 'https://ritcan.trivorn.org/api/repos/todo-app';
 const RIT_FILE = join(import.meta.dir, 'framework-demo.rit');
 
 const TOKEN = process.argv[2] || process.env.RIT_TOKEN;
@@ -22,84 +20,155 @@ if (!TOKEN) {
   process.exit(1);
 }
 
-// Clean up old file
 if (existsSync(RIT_FILE)) unlinkSync(RIT_FILE);
 
-// Create repo
 const { store, refStore, close } = openSqliteStore(RIT_FILE);
 const repo = await Repository.init(store, refStore);
 
-console.log('Creating component entities...');
+console.log('Creating todo app...');
 
-// App component
-await repo.hset('component:app', 'name', 'app');
-await repo.hset('component:app', 'template',
-  '<div class="app">' +
-    '<h2>{get("config:title")}</h2>' +
-    '<p>This is a rit framework app sourced from RitCan.</p>' +
-    '<p>Counter: {get("counter")}</p>' +
-    '<div class="buttons">' +
-      '<button onclick={set("counter", String(parseInt(get("counter") || "0") + 1))}>+1</button>' +
-      '<button onclick={set("counter", String(parseInt(get("counter") || "0") - 1))}>-1</button>' +
-      '<button onclick={set("counter", "0")}>Reset</button>' +
+// ── Todo list component (home page) ──────────────────────
+
+await repo.hset('component:todo-list', 'name', 'todo-list');
+await repo.hset('component:todo-list', 'template',
+  '<div class="todo-app">' +
+    '<header>' +
+      '<h1>Todo List</h1>' +
+      '<a href="/add" class="add-btn">+ Add Todo</a>' +
+    '</header>' +
+    '<div class="summary">{smembers("todo:ids").length} todos</div>' +
+    '{for(smembers("todo:ids"), id => ' +
+      '<div class="todo-item">' +
+        '<span class="check" onclick={hget("todo:" + id, "done") === "true" ? hset("todo:" + id, "done", "false") : hset("todo:" + id, "done", "true")}>' +
+          '{hget("todo:" + id, "done") === "true" ? "✓" : "○"}' +
+        '</span>' +
+        '<a href={"/todo/" + id} class="title">{hget("todo:" + id, "title")}</a>' +
+      '</div>' +
+    ')}' +
+    '{smembers("todo:ids").length === 0 ? "<p class=\\"empty\\">No todos yet. Add one!</p>" : ""}' +
+  '</div>'
+);
+await repo.hset('component:todo-list', 'style',
+  '.todo-app { max-width: 600px; margin: 0 auto; padding: 1rem; font-family: system-ui, sans-serif; } ' +
+  'header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; } ' +
+  'h1 { margin: 0; color: #1f2937; } ' +
+  '.add-btn { background: #2563eb; color: white; padding: 0.5rem 1rem; border-radius: 6px; text-decoration: none; } ' +
+  '.add-btn:hover { background: #1d4ed8; } ' +
+  '.summary { color: #6b7280; margin-bottom: 1rem; font-size: 0.9rem; } ' +
+  '.todo-item { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem; border: 1px solid #e5e7eb; border-radius: 6px; margin-bottom: 0.5rem; } ' +
+  '.check { cursor: pointer; font-size: 1.2rem; width: 1.5rem; text-align: center; user-select: none; } ' +
+  '.title { flex: 1; color: #1f2937; text-decoration: none; } ' +
+  '.title:hover { color: #2563eb; } ' +
+  '.empty { color: #9ca3af; text-align: center; padding: 2rem; }'
+);
+
+// ── Add todo component ────────────────────────────────────
+
+await repo.hset('component:todo-add', 'name', 'todo-add');
+await repo.hset('component:todo-add', 'template',
+  '<div class="add-page">' +
+    '<h1>Add Todo</h1>' +
+    '<div class="field">' +
+      '<input id="new-todo" type="text" placeholder="What needs to be done?" />' +
     '</div>' +
-    '<greeting name="Rit" />' +
+    '<div class="actions">' +
+      '<button onclick={' +
+        '(function() {' +
+          'var input = event.target.ownerDocument.getElementById("new-todo");' +
+          'var title = input.value.trim();' +
+          'if (!title) return;' +
+          'var id = String(Date.now());' +
+          'hset("todo:" + id, "title", title);' +
+          'hset("todo:" + id, "done", "false");' +
+          'sadd("todo:ids", id);' +
+          'input.value = "";' +
+          'navigate("/");' +
+        '})()' +
+      '}>Add</button>' +
+      '<a href="/">Cancel</a>' +
+    '</div>' +
   '</div>'
 );
-await repo.hset('component:app', 'style',
-  '.app { padding: 1rem; } ' +
-  'h2 { color: #2563eb; margin-top: 0; } ' +
-  'p { color: #374151; } ' +
-  '.buttons { display: flex; gap: 0.5rem; margin: 1rem 0; } ' +
-  'button { padding: 0.5rem 1rem; border: 1px solid #d1d5db; border-radius: 4px; background: white; cursor: pointer; } ' +
-  'button:hover { background: #f3f4f6; }'
+await repo.hset('component:todo-add', 'style',
+  '.add-page { max-width: 600px; margin: 0 auto; padding: 1rem; font-family: system-ui, sans-serif; } ' +
+  'h1 { color: #1f2937; } ' +
+  '.field { margin-bottom: 1rem; } ' +
+  'input { width: 100%; padding: 0.75rem; border: 1px solid #d1d5db; border-radius: 6px; font-size: 1rem; box-sizing: border-box; } ' +
+  '.actions { display: flex; gap: 1rem; align-items: center; } ' +
+  'button { padding: 0.75rem 1.5rem; background: #2563eb; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 1rem; } ' +
+  'button:hover { background: #1d4ed8; } ' +
+  'a { color: #6b7280; text-decoration: none; } ' +
+  'a:hover { color: #1f2937; }'
 );
 
-// Greeting component
-await repo.hset('component:greeting', 'name', 'greeting');
-await repo.hset('component:greeting', 'template',
-  '<div class="greeting">' +
-    '<span>Hello from the {props.name} framework!</span>' +
+// ── Todo detail component ─────────────────────────────────
+
+await repo.hset('component:todo-detail', 'name', 'todo-detail');
+await repo.hset('component:todo-detail', 'template',
+  '<div class="detail-page">' +
+    '<h1>{hget("todo:" + hget("route:params", "id"), "title")}</h1>' +
+    '<p class="status">Status: {hget("todo:" + hget("route:params", "id"), "done") === "true" ? "Completed" : "Pending"}</p>' +
+    '<div class="actions">' +
+      '<button onclick={' +
+        'hget("todo:" + hget("route:params", "id"), "done") === "true" ' +
+        '? hset("todo:" + hget("route:params", "id"), "done", "false") ' +
+        ': hset("todo:" + hget("route:params", "id"), "done", "true")' +
+      '}>{hget("todo:" + hget("route:params", "id"), "done") === "true" ? "Mark Pending" : "Mark Done"}</button>' +
+      '<a href="/">Back to list</a>' +
+    '</div>' +
   '</div>'
 );
-await repo.hset('component:greeting', 'style',
-  '.greeting { margin-top: 1rem; padding: 0.75rem; background: #eff6ff; border-radius: 4px; color: #1e40af; }'
-);
-await repo.hset('component:greeting', 'props',
-  '[{"name": "name", "type": "string", "required": true}]'
+await repo.hset('component:todo-detail', 'style',
+  '.detail-page { max-width: 600px; margin: 0 auto; padding: 1rem; font-family: system-ui, sans-serif; } ' +
+  'h1 { color: #1f2937; } ' +
+  '.status { color: #6b7280; } ' +
+  '.actions { display: flex; gap: 1rem; align-items: center; margin-top: 1rem; } ' +
+  'button { padding: 0.5rem 1rem; background: #2563eb; color: white; border: none; border-radius: 6px; cursor: pointer; } ' +
+  'button:hover { background: #1d4ed8; } ' +
+  'a { color: #6b7280; text-decoration: none; } ' +
+  'a:hover { color: #1f2937; }'
 );
 
-// App data
-await repo.set('config:title', 'Hello from Rit');
-await repo.set('counter', '0');
+// ── Routes (flat) ─────────────────────────────────────────
 
-// Commit
-const commitHash = await repo.commit('Initial framework demo app');
+await repo.hset('route:home', 'name', 'home');
+await repo.hset('route:home', 'path', '/');
+await repo.hset('route:home', 'component', 'component:todo-list');
+
+await repo.hset('route:add', 'name', 'add');
+await repo.hset('route:add', 'path', '/add');
+await repo.hset('route:add', 'component', 'component:todo-add');
+
+await repo.hset('route:detail', 'name', 'detail');
+await repo.hset('route:detail', 'path', '/todo/:id');
+await repo.hset('route:detail', 'component', 'component:todo-detail');
+
+// ── Seed data ─────────────────────────────────────────────
+
+await repo.sadd('todo:ids', '1', '2', '3');
+await repo.hset('todo:1', 'title', 'Build the rit framework');
+await repo.hset('todo:1', 'done', 'true');
+await repo.hset('todo:2', 'title', 'Test in the browser');
+await repo.hset('todo:2', 'done', 'true');
+await repo.hset('todo:3', 'title', 'Add persistence for user data');
+await repo.hset('todo:3', 'done', 'false');
+
+// ── Commit and push ───────────────────────────────────────
+
+const commitHash = await repo.commit('Todo list demo app');
 console.log('Committed:', commitHash);
 
-// Collect ALL blocks from the store (simple approach for first push)
 const blocks: Array<{ hash: string; data: string }> = [];
 for await (const hash of store.hashes()) {
   const data = await store.get(hash);
-  if (data) {
-    blocks.push({ hash, data: encodeBlockData(data) });
-  }
+  if (data) blocks.push({ hash, data: encodeBlockData(data) });
 }
 
 console.log(`Pushing ${blocks.length} blocks to RitCan...`);
-
 const result = await httpPush(
-  RITCAN_URL,
-  'main',
-  commitHash!,
-  blocks,
+  RITCAN_URL, 'main', commitHash!, blocks,
   { headers: { Authorization: `Bearer ${TOKEN}` } },
 );
 
-if (result.accepted) {
-  console.log('Push accepted! Repo is live at:', RITCAN_URL);
-} else {
-  console.error('Push rejected:', result.reason);
-}
-
+console.log(result.accepted ? 'Push accepted!' : `Push rejected: ${result.reason}`);
 close();
