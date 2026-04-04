@@ -3,7 +3,6 @@ import { createInterface } from 'node:readline';
 import { join, dirname, resolve, relative } from 'node:path';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { Repository } from '../repo/index.js';
-import { RedisDataModel } from '../types/index.js';
 import { openSqliteStore } from '../store/sqlite.js';
 import { SchemaRegistry, EntityStore } from '../../packages/rit-schema/src/index.js';
 import { ModuleSchema, FunctionSchema, TypeDefSchema, VariableSchema } from '../../packages/rit-sync/src/schemas.js';
@@ -420,20 +419,14 @@ async function dispatch(repo: Repository, cmd: string, args: string[]): Promise<
       const toResolve = resolveAll ? conflicts : conflicts.filter(c => c.key === keyArg);
       if (toResolve.length === 0) { console.log('(error) conflict not found for key: ' + keyArg); return; }
 
-      let tree = repo.data().tree;
-      for (const c of toResolve) {
+      const resolutions = toResolve.map(c => {
         const keyBytes = new Uint8Array(Buffer.from(c.key, 'hex'));
         const chosenHex = useOurs ? c.ours : c.theirs;
-        if (chosenHex) {
-          const valueBytes = new Uint8Array(Buffer.from(chosenHex, 'hex'));
-          tree = await tree.put(keyBytes, valueBytes);
-        } else {
-          tree = await tree.delete(keyBytes);
-        }
-      }
+        const value = chosenHex ? new Uint8Array(Buffer.from(chosenHex, 'hex')) : null;
+        return { key: keyBytes, value };
+      });
 
-      // Update working tree
-      await repo.setData(new RedisDataModel(tree));
+      await repo.resolveConflicts(resolutions);
 
       // Remove resolved conflicts from the list
       const resolvedKeys = new Set(toResolve.map(c => c.key));

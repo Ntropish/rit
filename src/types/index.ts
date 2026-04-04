@@ -6,6 +6,10 @@ import {
   compositeKey,
   compareBytes,
 } from '../encoding/index.js';
+import type { DataModel } from './interface.js';
+
+export type { DataModel } from './interface.js';
+export { EphemeralDataModel } from './ephemeral.js';
 
 // ── Type tags ─────────────────────────────────────────────────
 // These go into the composite key to namespace sub-keys by type.
@@ -87,7 +91,7 @@ function globToMatcher(pattern: string): (s: string) => boolean {
  * Every mutation returns a new RedisDataModel (immutable snapshots).
  * The underlying ProllyTree handles structural sharing automatically.
  */
-export class RedisDataModel {
+export class RedisDataModel implements DataModel {
   private _tree: ProllyTree;
 
   constructor(tree: ProllyTree) {
@@ -100,6 +104,20 @@ export class RedisDataModel {
 
   private _withTree(tree: ProllyTree): RedisDataModel {
     return new RedisDataModel(tree);
+  }
+
+  // ── Low-level access ────────────────────────────────────
+
+  async *entries(): AsyncIterable<{ key: Uint8Array; value: Uint8Array }> {
+    yield* this._tree.entries();
+  }
+
+  async mutate(
+    puts: Array<{ key: Uint8Array; value: Uint8Array }>,
+    deletes: Uint8Array[] = [],
+  ): Promise<RedisDataModel> {
+    const tree = await this._tree.mutate(puts, deletes);
+    return this._withTree(tree);
   }
 
   // ── String operations ───────────────────────────────────

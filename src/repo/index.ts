@@ -1,11 +1,55 @@
 import type { Hash, Store } from '../store/types.js';
 import { ProllyTree } from '../prolly/index.js';
-import { RedisDataModel } from '../types/index.js';
+import { RedisDataModel, type DataModel } from '../types/index.js';
 import { CommitGraph, MemoryRefStore, type Commit, type RefStore } from '../commit/index.js';
 import { threeWayMerge, type MergeResult } from '../merge/index.js';
 import { decodeInternalNode } from '../encoding/index.js';
 import { HybridLogicalClock } from '../hlc/index.js';
+import { compareBytes } from '../encoding/index.js';
 import type { DiffEntry } from '../prolly/index.js';
+
+/**
+ * Produces DiffEntry objects by walking two sorted entry iterables in parallel.
+ * Used when one or both sides are not prolly trees (no hash-based pruning available).
+ * O(total entries) instead of O(changed entries).
+ */
+async function* sortedEntryDiff(
+  leftIter: AsyncIterable<{ key: Uint8Array; value: Uint8Array }>,
+  rightIter: AsyncIterable<{ key: Uint8Array; value: Uint8Array }>,
+): AsyncIterable<DiffEntry> {
+  const left = leftIter[Symbol.asyncIterator]();
+  const right = rightIter[Symbol.asyncIterator]();
+
+  let l = await left.next();
+  let r = await right.next();
+
+  while (!l.done && !r.done) {
+    const cmp = compareBytes(l.value.key, r.value.key);
+    if (cmp < 0) {
+      yield { type: 'removed', key: l.value.key, left: l.value.value };
+      l = await left.next();
+    } else if (cmp > 0) {
+      yield { type: 'added', key: r.value.key, right: r.value.value };
+      r = await right.next();
+    } else {
+      if (compareBytes(l.value.value, r.value.value) !== 0) {
+        yield { type: 'modified', key: l.value.key, left: l.value.value, right: r.value.value };
+      }
+      l = await left.next();
+      r = await right.next();
+    }
+  }
+
+  while (!l.done) {
+    yield { type: 'removed', key: l.value.key, left: l.value.value };
+    l = await left.next();
+  }
+
+  while (!r.done) {
+    yield { type: 'added', key: r.value.key, right: r.value.value };
+    r = await right.next();
+  }
+}
 
 function bytesToHex(bytes: Uint8Array): string {
   let hex = '';
@@ -51,7 +95,7 @@ export class Repository {
   private graph: CommitGraph;
   private refs: RefStore;
   private _head: string; // current branch name
-  private _working: RedisDataModel; // working tree (uncommitted state)
+  private _working: DataModel; // working tree (uncommitted state)
   private _headCommitHash: Hash | null; // commit that HEAD points to
   private _hlc: HybridLogicalClock;
 
@@ -60,7 +104,7 @@ export class Repository {
     graph: CommitGraph,
     refs: RefStore,
     head: string,
-    working: RedisDataModel,
+    working: DataModel,
     headCommitHash: Hash | null,
     hlc: HybridLogicalClock,
   ) {
@@ -136,13 +180,13 @@ export class Repository {
 
   // ── Working tree ────────────────────────────────────────
 
-  /** Get the current working tree (Redis data model). */
-  data(): RedisDataModel {
+  /** Get the current working tree (data model). */
+  data(): DataModel {
     return this._working;
   }
 
   /** Update the working tree. Call this after performing Redis operations. */
-  async setData(data: RedisDataModel): Promise<void> {
+  async setData(data: DataModel): Promise<void> {
     this._working = data;
     await this._persistWorking();
   }
@@ -159,9 +203,29 @@ export class Repository {
 
   // ── Working tree persistence ─────────────────────────────
 
+  /**
+   * Get the prolly tree root hash for the current working tree.
+   * If the working tree is a RedisDataModel (persistent tier), returns its rootHash directly.
+   * Otherwise, serializes entries to a prolly tree (ephemeral tier commit bridge).
+   */
+  private async _getWorkingTreeHash(): Promise<Hash | null> {
+    if (this._working instanceof RedisDataModel) {
+      return this._working.tree.rootHash;
+    }
+    // Ephemeral tier: collect entries and build a prolly tree
+    const entries: Array<{ key: Uint8Array; value: Uint8Array }> = [];
+    for await (const entry of this._working.entries()) {
+      entries.push(entry);
+    }
+    if (entries.length === 0) return null;
+    const emptyTree = new ProllyTree(this.store, null);
+    const built = await emptyTree.buildFromSorted(entries);
+    return built.rootHash;
+  }
+
   /** Persist the working tree root hash so it survives process restarts. */
   private async _persistWorking(): Promise<void> {
-    const rootHash = this._working.tree.rootHash;
+    const rootHash = await this._getWorkingTreeHash();
     if (rootHash !== null) {
       await this.refs.setRef(`refs/working/${this._head}`, rootHash);
     }
@@ -170,11 +234,11 @@ export class Repository {
   // ── Commit operations ───────────────────────────────────
 
   /** Commit the current working tree state. */
-  async commit(message: string, data?: RedisDataModel): Promise<Hash> {
+  async commit(message: string, data?: DataModel): Promise<Hash> {
     if (data) {
       this._working = data;
     }
-    const treeHash = this._working.tree.rootHash;
+    const treeHash = await this._getWorkingTreeHash();
     const parents = this._headCommitHash ? [this._headCommitHash] : [];
 
     const commit: Commit = {
@@ -259,16 +323,24 @@ export class Repository {
 
   /** Diff working tree against the last commit. */
   async *diffWorking(): AsyncIterable<DiffEntry> {
-    if (!this._headCommitHash) {
-      // Everything in working tree is "added"
-      const empty = new ProllyTree(this.store, null);
-      yield* empty.diff(this._working.tree);
-      return;
+    if (this._working instanceof RedisDataModel) {
+      // Fast path: both sides are prolly trees, use hash-based pruning
+      if (!this._headCommitHash) {
+        const empty = new ProllyTree(this.store, null);
+        yield* empty.diff(this._working.tree);
+        return;
+      }
+      const commit = await this.graph.getCommit(this._headCommitHash);
+      if (!commit) throw new Error('HEAD commit not found');
+      const headTree = new ProllyTree(this.store, commit.treeHash);
+      yield* headTree.diff(this._working.tree);
+    } else {
+      // Slow path: sorted-entry parallel walk for ephemeral working tree
+      const headTree = this._headCommitHash
+        ? new ProllyTree(this.store, (await this.graph.getCommit(this._headCommitHash))?.treeHash ?? null)
+        : new ProllyTree(this.store, null);
+      yield* sortedEntryDiff(headTree.entries(), this._working.entries());
     }
-    const commit = await this.graph.getCommit(this._headCommitHash);
-    if (!commit) throw new Error('HEAD commit not found');
-    const headTree = new ProllyTree(this.store, commit.treeHash);
-    yield* headTree.diff(this._working.tree);
   }
 
   // ── Merge operations ────────────────────────────────────
@@ -326,6 +398,26 @@ export class Repository {
 
     await this._persistWorking();
     return result;
+  }
+
+  /**
+   * Resolve merge conflicts by applying chosen values to the working tree.
+   * Each resolution specifies the composite key and the chosen value (or null to delete).
+   */
+  async resolveConflicts(
+    resolutions: Array<{ key: Uint8Array; value: Uint8Array | null }>,
+  ): Promise<void> {
+    const puts: Array<{ key: Uint8Array; value: Uint8Array }> = [];
+    const deletes: Uint8Array[] = [];
+    for (const r of resolutions) {
+      if (r.value !== null) {
+        puts.push({ key: r.key, value: r.value });
+      } else {
+        deletes.push(r.key);
+      }
+    }
+    this._working = await this._working.mutate(puts, deletes);
+    await this._persistWorking();
   }
 
   // ── Snapshot operations ─────────────────────────────────
