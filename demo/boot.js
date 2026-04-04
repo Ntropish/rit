@@ -1,11 +1,12 @@
 /**
- * Boot script: authenticates via OIDC, clones from RitCan,
- * loads into ReactiveStore, and renders.
+ * Boot script: authenticates via OIDC, clones or syncs from RitCan
+ * using persistent IndexedDB storage, and renders.
  */
 
 import {
-  MemoryStore,
-  MemoryRefStore,
+  IdbStore,
+  IdbRefStore,
+  openIdbStore,
   Repository,
   loadRepoIntoStore,
   renderComponent,
@@ -16,6 +17,7 @@ const CLIENT_ID = 'd802f1c4226038f7cca41110d16579f6';
 const REDIRECT_URI = `${window.location.origin}/auth/callback`;
 const SCOPE = 'openid profile groups';
 const RITCAN_URL = 'https://ritcan.trivorn.org/api/repos/framework-demo';
+const DB_NAME = 'rit-framework-demo';
 
 const STORAGE = {
   accessToken: 'oidc:access_token',
@@ -60,7 +62,6 @@ async function login() {
 
   sessionStorage.setItem('oidc:pkce_verifier', verifier);
   sessionStorage.setItem('oidc:state', state);
-  // Save current hash so we can restore it after callback
   sessionStorage.setItem('oidc:pre_auth_path', window.location.pathname + window.location.hash);
 
   const params = new URLSearchParams({
@@ -114,7 +115,6 @@ async function handleCallback() {
   localStorage.setItem(STORAGE.idToken, data.id_token);
   localStorage.setItem(STORAGE.tokenExpiry, String(Date.now() + data.expires_in * 1000));
 
-  // Restore the original path
   const prePath = sessionStorage.getItem('oidc:pre_auth_path') || '/';
   sessionStorage.removeItem('oidc:pre_auth_path');
   window.history.replaceState({}, '', prePath);
@@ -129,69 +129,118 @@ function getAccessToken() {
   return token;
 }
 
-// ── App boot ─────────────────────────────────────────────
+// ── Sync helpers ─────────────────────────────────────────
 
-async function cloneAndRender(token) {
-  const authHeaders = { Authorization: `Bearer ${token}` };
+function decodeBlock(base64) {
+  const binary = atob(base64);
+  const data = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) data[i] = binary.charCodeAt(i);
+  return data;
+}
 
-  status.textContent = 'Cloning from RitCan...';
+/**
+ * Pull a branch from RitCan. If localHash is provided, only new
+ * commits since that hash are fetched (incremental sync).
+ */
+async function pullBranch(store, refStore, branch, authHeaders) {
+  const localHash = await refStore.getRef(`refs/heads/${branch}`);
 
-  const store = new MemoryStore();
-  const refStore = new MemoryRefStore();
+  const pullRes = await fetch(`${RITCAN_URL}/pull`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders },
+    body: JSON.stringify({ type: 'pull-request', branch, localHash }),
+  });
+  if (!pullRes.ok) throw new Error(`Failed to pull ${branch}: ${pullRes.status}`);
+  const pullBody = await pullRes.json();
 
-  const refsRes = await fetch(`${RITCAN_URL}/info/refs`, { headers: authHeaders });
-  if (!refsRes.ok) throw new Error(`Failed to fetch refs: ${refsRes.status}`);
-  const refs = await refsRes.json();
-
-  for (const branch of Object.keys(refs.branches)) {
-    status.textContent = `Pulling branch: ${branch}...`;
-    const pullRes = await fetch(`${RITCAN_URL}/pull`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...authHeaders },
-      body: JSON.stringify({ type: 'pull-request', branch, localHash: null }),
-    });
-    if (!pullRes.ok) throw new Error(`Failed to pull ${branch}: ${pullRes.status}`);
-    const pullBody = await pullRes.json();
-
-    for (const block of pullBody.blocks) {
-      const binary = atob(block.data);
-      const data = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) data[i] = binary.charCodeAt(i);
-      await store.put(block.hash, data);
-    }
-
-    if (pullBody.commitHash) {
-      await refStore.setRef(`refs/heads/${branch}`, pullBody.commitHash);
-    }
+  // Store new blocks
+  if (pullBody.blocks && pullBody.blocks.length > 0) {
+    const decoded = pullBody.blocks.map(b => ({
+      hash: b.hash,
+      data: decodeBlock(b.data),
+    }));
+    await store.putBatch(decoded);
   }
 
-  status.textContent = 'Loading...';
-  const repo = await Repository.init(store, refStore);
-  const reactiveStore = await loadRepoIntoStore(repo);
+  // Update branch ref
+  if (pullBody.commitHash) {
+    await refStore.setRef(`refs/heads/${branch}`, pullBody.commitHash);
+  }
 
-  status.textContent = 'Rendering...';
-  renderComponent(reactiveStore, 'app', app);
-
-  status.textContent = 'Running! App sourced from RitCan.';
+  return {
+    updated: pullBody.blocks && pullBody.blocks.length > 0,
+    commitHash: pullBody.commitHash,
+    localHash,
+  };
 }
+
+// ── App boot ─────────────────────────────────────────────
 
 async function boot() {
   try {
-    // Check if this is an auth callback
+    // Handle auth callback
     if (window.location.pathname === '/auth/callback') {
       status.textContent = 'Completing sign-in...';
       await handleCallback();
     }
 
-    // Check for existing token
+    // Check for token
     const token = getAccessToken();
-    if (token) {
-      await cloneAndRender(token);
-    } else {
-      // No token; redirect to Auth Core login
+    if (!token) {
       status.textContent = 'Redirecting to sign in...';
       await login();
+      return;
     }
+
+    const authHeaders = { Authorization: `Bearer ${token}` };
+
+    // Open persistent IndexedDB store
+    status.textContent = 'Opening local store...';
+    const { store, refStore, close } = await openIdbStore(DB_NAME);
+
+    // Check if we already have this repo locally
+    const localMainRef = await refStore.getRef('refs/heads/main');
+    const isFirstClone = !localMainRef;
+
+    if (isFirstClone) {
+      status.textContent = 'First visit: cloning from RitCan...';
+    } else {
+      status.textContent = 'Syncing updates from RitCan...';
+    }
+
+    // Fetch remote refs to discover branches
+    const refsRes = await fetch(`${RITCAN_URL}/info/refs`, { headers: authHeaders });
+    if (!refsRes.ok) throw new Error(`Failed to fetch refs: ${refsRes.status}`);
+    const refs = await refsRes.json();
+
+    // Pull each branch (clone on first visit, incremental sync after)
+    let anyUpdated = false;
+    for (const branch of Object.keys(refs.branches)) {
+      const result = await pullBranch(store, refStore, branch, authHeaders);
+      if (result.updated) anyUpdated = true;
+    }
+
+    if (isFirstClone) {
+      status.textContent = 'Clone complete. Loading...';
+    } else if (anyUpdated) {
+      status.textContent = 'Synced new changes. Loading...';
+    } else {
+      status.textContent = 'Already up to date. Loading...';
+    }
+
+    // Open repository from IndexedDB
+    const repo = await Repository.init(store, refStore);
+
+    // Load into ReactiveStore and render
+    const reactiveStore = await loadRepoIntoStore(repo);
+    renderComponent(reactiveStore, 'app', app);
+
+    status.textContent = isFirstClone
+      ? 'Running! Cloned from RitCan, stored locally.'
+      : anyUpdated
+        ? 'Running! Synced latest changes.'
+        : 'Running! Loaded from local store (already up to date).';
+
   } catch (err) {
     status.textContent = 'Error: ' + err.message;
     console.error(err);
