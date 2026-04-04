@@ -12,9 +12,9 @@ export const componentSchema: EntitySchema = {
   identity: ['name'],
   fields: {
     name:     { type: 'string', required: true },
-    template: { type: 'string', required: true },
-    style:    { type: 'string' },
-    props:    { type: 'string' }, // JSON: [{name, type, required}]
+    template: { type: 'string', required: true, format: 'code:html' },
+    style:    { type: 'string', format: 'code:css' },
+    props:    { type: 'string', format: 'code:json' },
   },
 };
 
