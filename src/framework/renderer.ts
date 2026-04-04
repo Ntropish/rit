@@ -248,6 +248,7 @@ function renderForExpression(expr: string, ctx: RenderContext): RenderResult {
       const iterCtx: RenderContext = {
         ...ctx,
         props: { ...ctx.props, [varName]: String(item) },
+        extraScope: { ...(ctx.extraScope ?? {}), [varName]: String(item) },
       };
 
       const bodyAst = parseTemplate(bodyExpr);
