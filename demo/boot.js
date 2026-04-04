@@ -128,7 +128,11 @@ async function pullBranch(store, refStore, branch, authHeaders) {
     });
     await store.putBatch(decoded);
   }
-  if (body.commitHash) await refStore.setRef(`refs/heads/${branch}`, body.commitHash);
+  if (body.commitHash) {
+    await refStore.setRef(`refs/heads/${branch}`, body.commitHash);
+    // Clear persisted working tree so Repository.init() picks up the new commit
+    await refStore.deleteRef(`refs/working/${branch}`);
+  }
 }
 
 // ── Boot ─────────────────────────────────────────────────
