@@ -141,9 +141,9 @@ await repo.hset('component:todo-detail', 'template',
       '<button class="delete-btn" onclick={' +
         '(function() {' +
           'var id = hget("route:params", "id");' +
-          'srem("todo:ids", id);' +
-          'del("todo:" + id);' +
-          'navigate("/");' +
+          'srem("todo:ids", id)' +
+            '.then(function() { return del("todo:" + id); })' +
+            '.then(function() { navigate("/"); });' +
         '})()' +
       '}>Delete</button>' +
       '<a href="/">Back to list</a>' +
