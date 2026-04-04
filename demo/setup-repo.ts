@@ -131,15 +131,17 @@ await repo.hset('component:todo-detail', 'name', 'todo-detail');
 await repo.hset('component:todo-detail', 'template',
   '<div class="detail-page">' +
     '<div class="edit-title">' +
-      '<input id="edit-title" type="text" value={hget("todo:" + hget("route:params", "id"), "title")} />' +
-      '<button onclick={' +
+      '<input id="edit-title" type="text" value={hget("todo:" + hget("route:params", "id"), "title")} oninput={runtimeSet("ui:pending-title", event.target.value)} />' +
+      '<button class="save-btn" style={get("ui:pending-title") !== null && get("ui:pending-title") !== hget("todo:" + hget("route:params", "id"), "title") ? "display:inline-block" : "display:none"} onclick={' +
         '(function() {' +
           'var id = hget("route:params", "id");' +
-          'var input = event.target.ownerDocument.getElementById("edit-title");' +
-          'var title = input.value.trim();' +
-          'if (title) hset("todo:" + id, "title", title);' +
+          'var title = get("ui:pending-title");' +
+          'if (title && title.trim()) {' +
+            'hset("todo:" + id, "title", title.trim())' +
+              '.then(function() { runtimeSet("ui:pending-title", title.trim()); });' +
+          '}' +
         '})()' +
-      '}>Save Title</button>' +
+      '}>Save</button>' +
     '</div>' +
     '<p class="status">Status: {hget("todo:" + hget("route:params", "id"), "done") === "true" ? "Completed" : "Pending"}</p>' +
     '<div class="actions">' +

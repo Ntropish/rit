@@ -314,12 +314,16 @@ export function evaluateExpression(expr: string, ctx: RenderContext, event?: Eve
     exists: (key: string) => store.exists(key),
     type: (key: string) => store.type(key),
 
-    // Writes (async, fire-and-forget in event handlers)
+    // Writes to committed layer (persisted via user repo mirroring)
     set: (key: string, value: string) => store.set(key, value),
     hset: (key: string, field: string, value: string) => store.hset(key, field, value),
     del: (key: string) => store.del(key),
     sadd: (key: string, ...members: string[]) => store.sadd(key, ...members),
     srem: (key: string, ...members: string[]) => store.srem(key, ...members),
+
+    // Writes to runtime layer (transient, not persisted)
+    runtimeSet: (key: string, value: string) => store.runtime.set(key, value),
+    runtimeHset: (key: string, field: string, value: string) => store.runtime.hset(key, field, value),
 
     props,
     event,
