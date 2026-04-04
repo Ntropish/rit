@@ -20,7 +20,7 @@ const AUTH_ISSUER = 'https://auth.trivorn.org';
 const CLIENT_ID = 'd802f1c4226038f7cca41110d16579f6';
 const REDIRECT_URI = `${window.location.origin}/auth/callback`;
 const SCOPE = 'openid profile groups';
-const RITCAN_URL = 'https://ritcan.trivorn.org/api/repos/todo-v2';
+const RITCAN_URL = 'https://ritcan.trivorn.org/api/repos/todo';
 const APP_DB = 'rit-app';
 const USER_DB = 'rit-userdata';
 

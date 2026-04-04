@@ -14,7 +14,7 @@ import { httpClone } from '../src/sync/http-client.js';
 import { MemoryStore } from '../src/store/memory.js';
 import { MemoryRefStore } from '../src/commit/index.js';
 
-const RITCAN_URL = 'https://ritcan.trivorn.org/api/repos/todo-v2';
+const RITCAN_URL = 'https://ritcan.trivorn.org/api/repos/todo';
 const RIT_FILE = join(import.meta.dir, 'framework-demo.rit');
 
 const TOKEN = process.argv[2] || process.env.RIT_TOKEN;
