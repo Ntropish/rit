@@ -529,6 +529,11 @@ export class Repository {
     await this._persistWorking();
   }
 
+  async hdel(key: string, field: string): Promise<void> {
+    this._working = await this._working.hdel(key, field);
+    await this._persistWorking();
+  }
+
   async hgetall(key: string): Promise<Record<string, string>> {
     return this._working.hgetall(key);
   }
