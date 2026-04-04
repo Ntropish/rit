@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { signal, computed, effect, batch } from '../reactive/signals.js';
 import { ReactiveStore } from '../reactive/store.js';
+import { EphemeralDataModel } from '../types/ephemeral.js';
 
 describe('Signals', () => {
   describe('signal()', () => {
@@ -213,7 +214,7 @@ describe('Signals', () => {
 });
 
 describe('ReactiveStore', () => {
-  describe('basic operations', () => {
+  describe('basic operations (committed layer)', () => {
     it('get/set work through the store', async () => {
       const store = new ReactiveStore();
       await store.set('key', 'value');
@@ -242,116 +243,133 @@ describe('ReactiveStore', () => {
     });
   });
 
-  describe('reactivity', () => {
-    it('effect re-runs synchronously when a read key changes', async () => {
+  describe('two-layer reads', () => {
+    it('runtime overlays committed for strings', async () => {
       const store = new ReactiveStore();
-      await store.set('count', '0');
+      await store.set('key', 'committed-value');
+      expect(store.get('key')).toBe('committed-value');
 
-      const values: (string | null)[] = [];
-      const dispose = effect(() => {
-        values.push(store.get('count'));
-      });
-
-      // No setTimeout needed: reads are synchronous, tracking is immediate
-      expect(values).toEqual(['0']);
-      await store.set('count', '1');
-      expect(values).toEqual(['0', '1']);
-      dispose();
+      await store.runtime.set('key', 'runtime-value');
+      expect(store.get('key')).toBe('runtime-value');
     });
 
-    it('effect does not re-run for unrelated key changes', async () => {
+    it('falls through to committed when runtime has no value', async () => {
+      const store = new ReactiveStore();
+      await store.set('a', 'from-committed');
+      await store.runtime.set('b', 'from-runtime');
+
+      expect(store.get('a')).toBe('from-committed');
+      expect(store.get('b')).toBe('from-runtime');
+    });
+
+    it('runtime overlays committed for hash fields', async () => {
+      const store = new ReactiveStore();
+      await store.hset('product', 'name', 'Widget');
+      await store.hset('product', 'price', '10');
+      await store.runtime.hset('product', 'price', '15');
+
+      expect(store.hget('product', 'name')).toBe('Widget');
+      expect(store.hget('product', 'price')).toBe('15');
+    });
+
+    it('hgetall merges both layers with runtime taking precedence', async () => {
+      const store = new ReactiveStore();
+      await store.hmset('user', { name: 'alice', role: 'admin' });
+      await store.runtime.hset('user', 'status', 'online');
+      await store.runtime.hset('user', 'role', 'superadmin');
+
+      const all = store.hgetall('user');
+      expect(all).toEqual({ name: 'alice', role: 'superadmin', status: 'online' });
+    });
+
+    it('exists checks both layers', async () => {
+      const store = new ReactiveStore();
+      await store.set('a', '1');
+      await store.runtime.set('b', '2');
+
+      expect(store.exists('a')).toBe(true);
+      expect(store.exists('b')).toBe(true);
+      expect(store.exists('c')).toBe(false);
+    });
+
+    it('type returns runtime type if present', async () => {
+      const store = new ReactiveStore();
+      await store.set('key', 'string-value');
+      expect(store.type('key')).toBe('string');
+
+      // Runtime has a different type for the same key (unusual but valid)
+      await store.runtime.hset('key', 'field', 'value');
+      expect(store.type('key')).toBe('hash');
+    });
+
+    it('keys returns union of both layers', async () => {
       const store = new ReactiveStore();
       await store.set('a', '1');
       await store.set('b', '2');
+      await store.runtime.set('b', '3'); // overlap
+      await store.runtime.set('c', '4');
 
-      const runs: string[] = [];
-      const dispose = effect(() => {
-        runs.push('a:' + store.get('a'));
-      });
-
-      expect(runs).toEqual(['a:1']);
-      await store.set('b', '3'); // should NOT trigger
-      expect(runs).toEqual(['a:1']);
-      dispose();
+      const keys = [...store.keys()];
+      expect(keys.sort()).toEqual(['a', 'b', 'c']);
     });
 
-    it('hash field-level granularity: hget tracks specific field', async () => {
+    it('smembers returns union of both layers', async () => {
       const store = new ReactiveStore();
-      await store.hset('user', 'name', 'alice');
-      await store.hset('user', 'age', '30');
+      await store.sadd('tags', 'a', 'b');
+      await store.runtime.sadd('tags', 'b', 'c');
 
-      const nameReads: (string | null)[] = [];
-      const dispose = effect(() => {
-        nameReads.push(store.hget('user', 'name'));
-      });
-
-      expect(nameReads).toEqual(['alice']);
-      await store.hset('user', 'age', '31'); // different field, should NOT trigger
-      expect(nameReads).toEqual(['alice']);
-      await store.hset('user', 'name', 'bob'); // same field, SHOULD trigger
-      expect(nameReads).toEqual(['alice', 'bob']);
-      dispose();
+      const members = store.smembers('tags');
+      expect(members.sort()).toEqual(['a', 'b', 'c']);
     });
 
-    it('hgetall tracks at key level', async () => {
+    it('sismember checks both layers', async () => {
       const store = new ReactiveStore();
-      await store.hset('user', 'name', 'alice');
+      await store.sadd('tags', 'a');
+      await store.runtime.sadd('tags', 'b');
 
-      const reads: Record<string, string>[] = [];
-      const dispose = effect(() => {
-        reads.push(store.hgetall('user'));
-      });
-
-      expect(reads).toEqual([{ name: 'alice' }]);
-      await store.hset('user', 'age', '30'); // key-level change, SHOULD trigger
-      expect(reads).toEqual([{ name: 'alice' }, { name: 'alice', age: '30' }]);
-      dispose();
+      expect(store.sismember('tags', 'a')).toBe(true);
+      expect(store.sismember('tags', 'b')).toBe(true);
+      expect(store.sismember('tags', 'c')).toBe(false);
     });
 
-    it('computed derives from reactive reads', async () => {
+    it('zscore checks runtime first then committed', async () => {
       const store = new ReactiveStore();
-      await store.set('price', '100');
-      await store.set('quantity', '3');
+      await store.zadd('scores', 50, 'alice');
+      await store.runtime.zadd('scores', 99, 'alice');
 
-      const total = computed(() => {
-        const p = parseInt(store.get('price') ?? '0', 10);
-        const q = parseInt(store.get('quantity') ?? '0', 10);
-        return p * q;
-      });
-
-      expect(total.value).toBe(300);
-      await store.set('price', '200');
-      expect(total.value).toBe(600);
+      expect(store.zscore('scores', 'alice')).toBe(99);
     });
 
-    it('batch coalesces multiple writes', () => {
-      const s = signal(0);
-      const runs: number[] = [];
+    it('lists: runtime takes full precedence when present', async () => {
+      const store = new ReactiveStore();
+      await store.rpush('queue', 'committed-1', 'committed-2');
+      await store.runtime.rpush('queue', 'runtime-1');
 
-      s.subscribe(() => runs.push(s.peek()));
+      expect(store.lrange('queue', 0, -1)).toEqual(['runtime-1']);
+      expect(store.llen('queue')).toBe(1);
+    });
 
-      batch(() => {
-        s.value = 1;
-        s.value = 2;
-        s.value = 3;
-      });
+    it('lists: falls through to committed when runtime has no list', async () => {
+      const store = new ReactiveStore();
+      await store.rpush('queue', 'a', 'b');
 
-      expect(runs).toEqual([3]);
+      expect(store.lrange('queue', 0, -1)).toEqual(['a', 'b']);
+      expect(store.llen('queue')).toBe(2);
     });
   });
 
-  describe('snapshot', () => {
-    it('returns the current DataModel for commit', async () => {
+  describe('snapshot excludes runtime', () => {
+    it('snapshot returns only committed data', async () => {
       const store = new ReactiveStore();
-      await store.set('key', 'value');
-      await store.hset('user', 'name', 'alice');
+      await store.set('committed-key', 'yes');
+      await store.runtime.set('runtime-key', 'no');
 
-      const model = store.snapshot();
-      expect(await model.get('key')).toBe('value');
-      expect(await model.hget('user', 'name')).toBe('alice');
+      const snap = store.snapshot();
+      expect(await snap.get('committed-key')).toBe('yes');
+      expect(await snap.get('runtime-key')).toBe(null);
     });
 
-    it('snapshot is immutable after further writes', async () => {
+    it('snapshot is a point-in-time view of committed layer', async () => {
       const store = new ReactiveStore();
       await store.set('key', 'v1');
       const snap = store.snapshot();
@@ -362,9 +380,147 @@ describe('ReactiveStore', () => {
     });
   });
 
+  describe('clearRuntime', () => {
+    it('removes all runtime data', async () => {
+      const store = new ReactiveStore();
+      await store.runtime.set('temp', 'data');
+      await store.runtime.hset('cache', 'key', 'val');
+
+      expect(store.get('temp')).toBe('data');
+      store.clearRuntime();
+      expect(store.get('temp')).toBe(null);
+      expect(store.hget('cache', 'key')).toBe(null);
+    });
+
+    it('notifies subscribers when runtime is cleared', async () => {
+      const store = new ReactiveStore();
+      await store.runtime.set('key', 'runtime');
+
+      const values: (string | null)[] = [];
+      const dispose = effect(() => {
+        values.push(store.get('key'));
+      });
+
+      expect(values).toEqual(['runtime']);
+      store.clearRuntime();
+      expect(values).toEqual(['runtime', null]);
+      dispose();
+    });
+
+    it('committed data is unaffected by clearRuntime', async () => {
+      const store = new ReactiveStore();
+      await store.set('key', 'committed');
+      await store.runtime.set('key', 'runtime');
+
+      expect(store.get('key')).toBe('runtime');
+      store.clearRuntime();
+      expect(store.get('key')).toBe('committed');
+    });
+  });
+
+  describe('reactivity across layers', () => {
+    it('effect re-runs when committed data changes', async () => {
+      const store = new ReactiveStore();
+      await store.set('count', '0');
+
+      const values: (string | null)[] = [];
+      const dispose = effect(() => {
+        values.push(store.get('count'));
+      });
+
+      expect(values).toEqual(['0']);
+      await store.set('count', '1');
+      expect(values).toEqual(['0', '1']);
+      dispose();
+    });
+
+    it('effect re-runs when runtime data changes', async () => {
+      const store = new ReactiveStore();
+
+      const values: (string | null)[] = [];
+      const dispose = effect(() => {
+        values.push(store.get('status'));
+      });
+
+      expect(values).toEqual([null]);
+      await store.runtime.set('status', 'loading');
+      expect(values).toEqual([null, 'loading']);
+      await store.runtime.set('status', 'success');
+      expect(values).toEqual([null, 'loading', 'success']);
+      dispose();
+    });
+
+    it('effect sees runtime overlay over committed', async () => {
+      const store = new ReactiveStore();
+      await store.set('price', '10');
+
+      const values: (string | null)[] = [];
+      const dispose = effect(() => {
+        values.push(store.get('price'));
+      });
+
+      expect(values).toEqual(['10']);
+      // Runtime overrides committed
+      await store.runtime.set('price', '15');
+      expect(values).toEqual(['10', '15']);
+      // Clearing runtime reveals committed again
+      store.clearRuntime();
+      expect(values).toEqual(['10', '15', '10']);
+      dispose();
+    });
+
+    it('effect does not re-run for unrelated key changes', async () => {
+      const store = new ReactiveStore();
+      await store.set('a', '1');
+
+      const runs: string[] = [];
+      const dispose = effect(() => {
+        runs.push('a:' + store.get('a'));
+      });
+
+      expect(runs).toEqual(['a:1']);
+      await store.runtime.set('b', 'whatever');
+      expect(runs).toEqual(['a:1']);
+      dispose();
+    });
+
+    it('hash field-level granularity works across layers', async () => {
+      const store = new ReactiveStore();
+      await store.hset('user', 'name', 'alice');
+
+      const nameReads: (string | null)[] = [];
+      const dispose = effect(() => {
+        nameReads.push(store.hget('user', 'name'));
+      });
+
+      expect(nameReads).toEqual(['alice']);
+      // Runtime write to different field should NOT trigger
+      await store.runtime.hset('user', 'status', 'online');
+      expect(nameReads).toEqual(['alice']);
+      // Runtime write to same field SHOULD trigger
+      await store.runtime.hset('user', 'name', 'bob');
+      expect(nameReads).toEqual(['alice', 'bob']);
+      dispose();
+    });
+
+    it('computed derives from both layers', async () => {
+      const store = new ReactiveStore();
+      await store.set('base-price', '100');
+
+      const total = computed(() => {
+        const base = parseInt(store.get('base-price') ?? '0', 10);
+        const discount = parseInt(store.get('discount') ?? '0', 10);
+        return base - discount;
+      });
+
+      expect(total.value).toBe(100);
+      await store.runtime.set('discount', '20');
+      expect(total.value).toBe(80);
+    });
+  });
+
   describe('load', () => {
-    it('replaces internal state and notifies subscribers', async () => {
-      const { EphemeralDataModel } = await import('../types/ephemeral.js');
+    it('replaces committed layer and notifies subscribers', async () => {
       const store = new ReactiveStore();
       await store.set('key', 'old');
 
@@ -380,6 +536,35 @@ describe('ReactiveStore', () => {
       store.load(newModel);
       expect(values).toEqual(['old', 'new']);
       dispose();
+    });
+
+    it('load does not affect runtime layer', async () => {
+      const store = new ReactiveStore();
+      await store.runtime.set('temp', 'runtime-data');
+
+      let newModel = new EphemeralDataModel();
+      newModel = await newModel.set('key', 'committed') as typeof newModel;
+
+      store.load(newModel);
+      expect(store.get('temp')).toBe('runtime-data');
+      expect(store.get('key')).toBe('committed');
+    });
+  });
+
+  describe('batch coalesces across layers', () => {
+    it('batch coalesces multiple signal writes', () => {
+      const s = signal(0);
+      const runs: number[] = [];
+
+      s.subscribe(() => runs.push(s.peek()));
+
+      batch(() => {
+        s.value = 1;
+        s.value = 2;
+        s.value = 3;
+      });
+
+      expect(runs).toEqual([3]);
     });
   });
 });
