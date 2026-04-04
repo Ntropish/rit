@@ -56,7 +56,7 @@ export {
   type RenderContext, type RenderResult,
 } from './framework/index.js';
 
-export { loadRepoIntoStore } from './framework/bridge.js';
+export { loadRepoIntoStore, loadRepoOverlay, commitStoreToRepo } from './framework/bridge.js';
 
 export {
   Router, createRouter, loadRoutes,

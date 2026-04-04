@@ -31,7 +31,7 @@ export {
   type RenderResult,
 } from './renderer.js';
 
-export { loadRepoIntoStore } from './bridge.js';
+export { loadRepoIntoStore, loadRepoOverlay, commitStoreToRepo } from './bridge.js';
 
 export {
   Router,

@@ -1,13 +1,15 @@
 /**
- * Boot script: OIDC auth -> clone/sync from RitCan -> router -> render.
+ * Boot script: two-repo architecture.
+ * - App repo: cloned from RitCan (components, routes, config)
+ * - User data repo: local IndexedDB (todos, user state)
  */
 
 import {
-  IdbStore,
-  IdbRefStore,
   openIdbStore,
   Repository,
   loadRepoIntoStore,
+  loadRepoOverlay,
+  commitStoreToRepo,
   createRouter,
 } from '../dist/rit-runtime.js';
 
@@ -16,7 +18,8 @@ const CLIENT_ID = 'd802f1c4226038f7cca41110d16579f6';
 const REDIRECT_URI = `${window.location.origin}/auth/callback`;
 const SCOPE = 'openid profile groups';
 const RITCAN_URL = 'https://ritcan.trivorn.org/api/repos/todo-app';
-const DB_NAME = 'rit-todo-app';
+const APP_DB = 'rit-todo-app';
+const USER_DB = 'rit-todo-userdata';
 
 const STORAGE = {
   accessToken: 'oidc:access_token',
@@ -126,7 +129,6 @@ async function pullBranch(store, refStore, branch, authHeaders) {
     await store.putBatch(decoded);
   }
   if (body.commitHash) await refStore.setRef(`refs/heads/${branch}`, body.commitHash);
-  return { updated: body.blocks?.length > 0 };
 }
 
 // ── Boot ─────────────────────────────────────────────────
@@ -143,23 +145,70 @@ async function boot() {
 
     const authHeaders = { Authorization: `Bearer ${token}` };
 
-    status.textContent = 'Syncing...';
-    const { store, refStore } = await openIdbStore(DB_NAME);
+    // ── 1. Sync app repo from RitCan ──────────────────────
+    status.textContent = 'Syncing app...';
+    const appIdb = await openIdbStore(APP_DB);
 
     const refsRes = await fetch(`${RITCAN_URL}/info/refs`, { headers: authHeaders });
     if (!refsRes.ok) throw new Error(`Refs failed: ${refsRes.status}`);
     const refs = await refsRes.json();
 
     for (const branch of Object.keys(refs.branches)) {
-      await pullBranch(store, refStore, branch, authHeaders);
+      await pullBranch(appIdb.store, appIdb.refStore, branch, authHeaders);
     }
 
-    status.textContent = 'Loading...';
-    const repo = await Repository.init(store, refStore);
-    const reactiveStore = await loadRepoIntoStore(repo);
+    const appRepo = await Repository.init(appIdb.store, appIdb.refStore);
 
+    // ── 2. Open user data repo (local only) ───────────────
+    status.textContent = 'Loading user data...';
+    const userIdb = await openIdbStore(USER_DB);
+    const userRepo = await Repository.init(userIdb.store, userIdb.refStore);
+
+    // ── 3. Load both into ReactiveStore ───────────────────
+    // App repo first (components, routes, config, seed data)
+    const reactiveStore = await loadRepoIntoStore(appRepo);
+    // User data overlaid (user's todos, if any previous commits)
+    await loadRepoOverlay(userRepo, reactiveStore);
+
+    // ── 4. Auto-commit user changes ───────────────────────
+    // Debounced: after any store write, commit to user data repo
+    let commitTimer = null;
+    const scheduleCommit = () => {
+      if (commitTimer) clearTimeout(commitTimer);
+      commitTimer = setTimeout(async () => {
+        try {
+          await commitStoreToRepo(reactiveStore, userRepo, 'auto-save');
+        } catch (e) {
+          console.warn('Auto-commit failed:', e);
+        }
+      }, 500); // 500ms debounce
+    };
+
+    // Wrap store write methods to trigger auto-commit
+    const originalSet = reactiveStore.set.bind(reactiveStore);
+    reactiveStore.set = async (key, value) => {
+      await originalSet(key, value);
+      scheduleCommit();
+    };
+    const originalHset = reactiveStore.hset.bind(reactiveStore);
+    reactiveStore.hset = async (key, field, value) => {
+      await originalHset(key, field, value);
+      scheduleCommit();
+    };
+    const originalSadd = reactiveStore.sadd.bind(reactiveStore);
+    reactiveStore.sadd = async (key, ...members) => {
+      await originalSadd(key, ...members);
+      scheduleCommit();
+    };
+    const originalDel = reactiveStore.del.bind(reactiveStore);
+    reactiveStore.del = async (key) => {
+      await originalDel(key);
+      scheduleCommit();
+    };
+
+    // ── 5. Render ─────────────────────────────────────────
     status.textContent = '';
-    const router = await createRouter(reactiveStore, app);
+    await createRouter(reactiveStore, app);
 
   } catch (err) {
     status.textContent = 'Error: ' + err.message;
