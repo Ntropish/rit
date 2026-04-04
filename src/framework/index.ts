@@ -30,3 +30,5 @@ export {
   type RenderContext,
   type RenderResult,
 } from './renderer.js';
+
+export { loadRepoIntoStore } from './bridge.js';

@@ -37,3 +37,23 @@ export type {
   SyncTransport, SyncMessage, RefAdvertiseMessage, BlockRequestMessage, BlockResponseMessage,
   PushMessage, PushAckMessage, PullRequestMessage, PullResponseMessage, BranchUpdatedMessage,
 } from './sync/index.js';
+
+// ── Reactive layer ───────────────────────────────────────
+
+export { signal, computed, effect, batch, type Signal, type ReadonlySignal } from './reactive/index.js';
+export { ReactiveStore, LayerWriter, type Layer } from './reactive/store.js';
+export { EphemeralDataModel } from './types/ephemeral.js';
+
+// ── Framework ────────────────────────────────────────────
+
+export {
+  componentSchema, routeSchema, querySchema, configSchema, frameworkSchemas,
+  resolveComponent, listComponents,
+  parseTemplate,
+  renderComponent, renderNodes, evaluateExpression, scopeSelectors,
+  type ResolvedComponent, type PropDef,
+  type TemplateNode, type ElementNode, type TextNode, type ExpressionNode, type Attribute,
+  type RenderContext, type RenderResult,
+} from './framework/index.js';
+
+export { loadRepoIntoStore } from './framework/bridge.js';
