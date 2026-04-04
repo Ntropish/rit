@@ -2,6 +2,10 @@
  * Boot script: two-repo architecture.
  * - App repo: cloned from RitCan (components, routes, config)
  * - User data repo: local IndexedDB (todos, user state)
+ *
+ * User writes go to both the ReactiveStore (for reactivity) and
+ * the user data repo directly (for persistence). The user repo
+ * only ever contains user data, never app entities.
  */
 
 import {
@@ -9,7 +13,6 @@ import {
   Repository,
   loadRepoIntoStore,
   loadRepoOverlay,
-  commitStoreToRepo,
   createRouter,
 } from '../dist/rit-runtime.js';
 
@@ -130,7 +133,6 @@ async function pullBranch(store, refStore, branch, authHeaders) {
   }
   if (body.commitHash) {
     await refStore.setRef(`refs/heads/${branch}`, body.commitHash);
-    // Clear persisted working tree so Repository.init() picks up the new commit
     await refStore.deleteRef(`refs/working/${branch}`);
   }
 }
@@ -171,42 +173,53 @@ async function boot() {
     // ── 3. Load both into ReactiveStore ───────────────────
     // App repo first (components, routes, config, seed data)
     const reactiveStore = await loadRepoIntoStore(appRepo);
-    // User data overlaid (user's todos, if any previous commits)
+    // User data overlaid (user's todos override app seed data)
     await loadRepoOverlay(userRepo, reactiveStore);
 
-    // ── 4. Auto-commit user changes ───────────────────────
-    // Debounced: after any store write, commit to user data repo
+    // ── 4. Mirror writes to user repo for persistence ─────
+    // Each write goes to the ReactiveStore (reactivity) AND
+    // the user repo (persistence). Debounced commit.
     let commitTimer = null;
     const scheduleCommit = () => {
       if (commitTimer) clearTimeout(commitTimer);
       commitTimer = setTimeout(async () => {
         try {
-          await commitStoreToRepo(reactiveStore, userRepo, 'auto-save');
+          await userRepo.commit('auto-save');
         } catch (e) {
           console.warn('Auto-commit failed:', e);
         }
-      }, 500); // 500ms debounce
+      }, 500);
     };
 
-    // Wrap store write methods to trigger auto-commit
+    // Wrap store writes to also write to userRepo
     const originalSet = reactiveStore.set.bind(reactiveStore);
     reactiveStore.set = async (key, value) => {
       await originalSet(key, value);
+      await userRepo.set(key, value);
       scheduleCommit();
     };
     const originalHset = reactiveStore.hset.bind(reactiveStore);
     reactiveStore.hset = async (key, field, value) => {
       await originalHset(key, field, value);
+      await userRepo.hset(key, field, value);
       scheduleCommit();
     };
     const originalSadd = reactiveStore.sadd.bind(reactiveStore);
     reactiveStore.sadd = async (key, ...members) => {
       await originalSadd(key, ...members);
+      await userRepo.sadd(key, ...members);
       scheduleCommit();
     };
     const originalDel = reactiveStore.del.bind(reactiveStore);
     reactiveStore.del = async (key) => {
       await originalDel(key);
+      await userRepo.del(key);
+      scheduleCommit();
+    };
+    const originalSrem = reactiveStore.srem.bind(reactiveStore);
+    reactiveStore.srem = async (key, ...members) => {
+      await originalSrem(key, ...members);
+      await userRepo.srem(key, ...members);
       scheduleCommit();
     };
 
