@@ -127,7 +127,19 @@ function renderElement(node: ElementNode, ctx: RenderContext): RenderResult {
 
   // Apply attributes
   for (const attr of node.attrs) {
-    if (typeof attr.value === 'string') {
+    const isEvent = attr.name.startsWith('on');
+    const exprValue = typeof attr.value === 'string' ? null : attr.value;
+
+    if (isEvent && exprValue) {
+      // Event handler: onclick={expression}
+      // The expression is evaluated when the event fires.
+      const eventName = attr.name.slice(2).toLowerCase();
+      const handler = (e: Event) => {
+        evaluateExpression(exprValue.expr, ctx, e);
+      };
+      el.addEventListener(eventName, handler);
+      disposers.push(() => el.removeEventListener(eventName, handler));
+    } else if (typeof attr.value === 'string') {
       el.setAttribute(attr.name, attr.value);
     } else {
       // Dynamic attribute: wrap in effect
@@ -286,10 +298,11 @@ function parseForExpression(
  * Store read functions (get, hget, smembers, etc.) are provided in scope.
  * These reads register signal dependencies when called inside an effect.
  */
-export function evaluateExpression(expr: string, ctx: RenderContext): unknown {
+export function evaluateExpression(expr: string, ctx: RenderContext, event?: Event): unknown {
   const { store, props } = ctx;
 
   const scope: Record<string, unknown> = {
+    // Reads (synchronous, reactive)
     get: (key: string) => store.get(key),
     hget: (key: string, field: string) => store.hget(key, field),
     hgetall: (key: string) => store.hgetall(key),
@@ -300,7 +313,16 @@ export function evaluateExpression(expr: string, ctx: RenderContext): unknown {
     llen: (key: string) => store.llen(key),
     exists: (key: string) => store.exists(key),
     type: (key: string) => store.type(key),
+
+    // Writes (async, fire-and-forget in event handlers)
+    set: (key: string, value: string) => store.set(key, value),
+    hset: (key: string, field: string, value: string) => store.hset(key, field, value),
+    del: (key: string) => store.del(key),
+    sadd: (key: string, ...members: string[]) => store.sadd(key, ...members),
+    srem: (key: string, ...members: string[]) => store.srem(key, ...members),
+
     props,
+    event,
   };
 
   try {

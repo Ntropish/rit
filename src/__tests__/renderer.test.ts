@@ -283,6 +283,56 @@ describe('Renderer', () => {
   });
 });
 
+describe('Event handling', () => {
+  it('binds onclick handlers that can write to the store', async () => {
+    const store = new ReactiveStore();
+    await store.set('count', '0');
+    const ctx = makeCtx(store);
+    const ast = parseTemplate('<button onclick={set("count", "1")}>Click</button>');
+    const result = renderNodes(ast, ctx);
+
+    const button = result.nodes[0] as HTMLElement;
+    button.click();
+
+    // set() is async; wait a tick
+    await new Promise(r => setTimeout(r, 0));
+    expect(store.get('count')).toBe('1');
+    result.dispose();
+  });
+
+  it('event handlers have access to store reads', async () => {
+    const store = new ReactiveStore();
+    await store.set('count', '5');
+    const ctx = makeCtx(store);
+    const ast = parseTemplate(
+      '<button onclick={set("count", String(parseInt(get("count") || "0") + 1))}>Inc</button>'
+    );
+    const result = renderNodes(ast, ctx);
+
+    const button = result.nodes[0] as HTMLElement;
+    button.click();
+
+    await new Promise(r => setTimeout(r, 0));
+    expect(store.get('count')).toBe('6');
+    result.dispose();
+  });
+
+  it('cleans up event listeners on dispose', async () => {
+    const store = new ReactiveStore();
+    await store.set('count', '0');
+    const ctx = makeCtx(store);
+    const ast = parseTemplate('<button onclick={set("count", "99")}>Click</button>');
+    const result = renderNodes(ast, ctx);
+
+    const button = result.nodes[0] as HTMLElement;
+    result.dispose();
+
+    button.click();
+    await new Promise(r => setTimeout(r, 0));
+    expect(store.get('count')).toBe('0'); // handler was removed
+  });
+});
+
 describe('Scoped styles', () => {
   it('prefixes selectors with scope attribute', () => {
     const css = '.card { color: red; }';
