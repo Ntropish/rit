@@ -10,6 +10,9 @@ import { httpPush } from '../src/sync/http-client.js';
 import { encodeBlockData } from '../src/sync/transport.js';
 import { existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
+import { httpClone } from '../src/sync/http-client.js';
+import { MemoryStore } from '../src/store/memory.js';
+import { MemoryRefStore } from '../src/commit/index.js';
 
 const RITCAN_URL = 'https://ritcan.trivorn.org/api/repos/todo-v2';
 const RIT_FILE = join(import.meta.dir, 'framework-demo.rit');
@@ -20,9 +23,31 @@ if (!TOKEN) {
   process.exit(1);
 }
 
+// Always start fresh locally (we'll push on top of the remote history)
 if (existsSync(RIT_FILE)) unlinkSync(RIT_FILE);
 
 const { store, refStore, close } = openSqliteStore(RIT_FILE);
+
+// Try to pull existing remote state first so we build on top of it
+try {
+  const tempStore = new MemoryStore();
+  const tempRefs = new MemoryRefStore();
+  await httpClone(RITCAN_URL, tempStore, tempRefs, { headers: { Authorization: `Bearer ${TOKEN}` } });
+
+  // Copy blocks and refs to SQLite store
+  for await (const hash of tempStore.hashes()) {
+    const data = await tempStore.get(hash);
+    if (data) await store.put(hash, data);
+  }
+  for (const ref of await tempRefs.listRefs()) {
+    const hash = await tempRefs.getRef(ref);
+    if (hash) await refStore.setRef(ref, hash);
+  }
+  console.log('Pulled existing remote state.');
+} catch {
+  console.log('No existing remote state (fresh repo).');
+}
+
 const repo = await Repository.init(store, refStore);
 
 console.log('Creating todo app...');
