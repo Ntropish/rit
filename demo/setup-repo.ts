@@ -63,12 +63,12 @@ await repo.hset('component:todo-list', 'template',
     '</header>' +
     '<div class="summary">{smembers("todo:ids").length} todos</div>' +
     '{for(smembers("todo:ids"), id => ' +
-      '<a href={"/todo/" + id} class="todo-item">' +
-        '<span class="check" onclick={event.preventDefault(); hget("todo:" + id, "done") === "true" ? hset("todo:" + id, "done", "false") : hset("todo:" + id, "done", "true")}>' +
+      '<div class="todo-item">' +
+        '<span class="check" onclick={hget("todo:" + id, "done") === "true" ? hset("todo:" + id, "done", "false") : hset("todo:" + id, "done", "true")}>' +
           '{hget("todo:" + id, "done") === "true" ? "✓" : "○"}' +
         '</span>' +
-        '<span class="title">{hget("todo:" + id, "title") || "(untitled)"}</span>' +
-      '</a>' +
+        '<a href={"/todo/" + id} class="title">{hget("todo:" + id, "title") || "(untitled)"}</a>' +
+      '</div>' +
     ')}' +
   '</div>'
 );
@@ -79,10 +79,11 @@ await repo.hset('component:todo-list', 'style',
   '.add-btn { background: #2563eb; color: white; padding: 0.5rem 1rem; border-radius: 6px; text-decoration: none; } ' +
   '.add-btn:hover { background: #1d4ed8; } ' +
   '.summary { color: #6b7280; margin-bottom: 1rem; font-size: 0.9rem; } ' +
-  '.todo-item { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem; border: 1px solid #e5e7eb; border-radius: 6px; margin-bottom: 0.5rem; text-decoration: none; color: inherit; cursor: pointer; } ' +
-  '.todo-item:hover { border-color: #2563eb; background: #f8fafc; } ' +
+  '.todo-item { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem; border: 1px solid #e5e7eb; border-radius: 6px; margin-bottom: 0.5rem; } ' +
   '.check { cursor: pointer; font-size: 1.2rem; width: 1.5rem; text-align: center; user-select: none; } ' +
-  '.title { flex: 1; color: #1f2937; }'
+  '.check:hover { color: #2563eb; } ' +
+  '.title { flex: 1; color: #1f2937; text-decoration: none; padding: 0.25rem 0; } ' +
+  '.title:hover { color: #2563eb; }'
 );
 
 // ── Add todo component ────────────────────────────────────
