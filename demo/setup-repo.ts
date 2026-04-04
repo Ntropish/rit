@@ -207,6 +207,12 @@ await repo.hset('todo:3', 'done', 'false');
 
 // ── Migrate templates to entity-based ─────────────────────
 
+// Clear any stale root fields from previous migrations so
+// migrateAllComponents treats these as fresh string-template components.
+for (const name of ['todo-list', 'todo-add', 'todo-detail']) {
+  await repo.hdel(`component:${name}`, 'root');
+}
+
 const migrated = await migrateAllComponents(repo);
 console.log(`Migrated ${migrated.length} components to entity-based templates:`, migrated);
 
