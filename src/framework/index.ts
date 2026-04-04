@@ -12,3 +12,21 @@ export {
   type ResolvedComponent,
   type PropDef,
 } from './resolver.js';
+
+export {
+  parseTemplate,
+  type TemplateNode,
+  type ElementNode,
+  type TextNode,
+  type ExpressionNode,
+  type Attribute,
+} from './parser.js';
+
+export {
+  renderComponent,
+  renderNodes,
+  evaluateExpression,
+  scopeSelectors,
+  type RenderContext,
+  type RenderResult,
+} from './renderer.js';
