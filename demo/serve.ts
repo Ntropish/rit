@@ -15,11 +15,7 @@ Bun.serve({
     const url = new URL(req.url);
     let path = url.pathname;
 
-    // SPA routes: serve index.html for /auth/callback and /
-    if (path === '/' || path === '/auth/callback') {
-      path = '/demo/index.html';
-    }
-
+    // Try serving static files first
     const filePath = join(ROOT, path);
     const file = Bun.file(filePath);
 
@@ -27,7 +23,8 @@ Bun.serve({
       return new Response(file);
     }
 
-    return new Response('Not found', { status: 404 });
+    // All other paths: serve index.html (SPA client-side routing)
+    return new Response(Bun.file(join(ROOT, 'demo/index.html')));
   },
 });
 
