@@ -1,87 +1,81 @@
 /**
- * Boot script: creates a rit repo in memory, populates it with
- * component entities, loads into a ReactiveStore, and renders.
+ * Boot script: clones a rit repo from RitCan,
+ * loads it into a ReactiveStore, and renders the app component.
  */
 
 import {
   MemoryStore,
+  MemoryRefStore,
   Repository,
-  ReactiveStore,
-  EphemeralDataModel,
   loadRepoIntoStore,
   renderComponent,
 } from '../dist/rit-runtime.js';
 
+const RITCAN_URL = 'https://ritcan.trivorn.org/api/repos/framework-demo';
+
 const status = document.getElementById('status');
 const app = document.getElementById('app');
+const authForm = document.getElementById('auth-form');
 
-async function boot() {
-  status.textContent = 'Creating repository...';
+window.startApp = async function() {
+  const tokenInput = document.getElementById('token-input');
+  const token = tokenInput.value.trim();
+  if (!token) {
+    status.textContent = 'Please paste a token first.';
+    return;
+  }
 
-  // Create an in-memory rit repo
-  const store = new MemoryStore();
-  const repo = await Repository.init(store);
+  authForm.style.display = 'none';
+  const authHeaders = { Authorization: `Bearer ${token}` };
 
-  status.textContent = 'Creating components...';
+  try {
+    status.textContent = 'Cloning from RitCan...';
 
-  // Create component entities in the repo
-  await repo.hset('component:app', 'name', 'app');
-  await repo.hset('component:app', 'template',
-    '<div class="app">' +
-      '<h2>{get("config:title")}</h2>' +
-      '<p>This is a rit framework app running in the browser.</p>' +
-      '<p>Counter: {get("counter")}</p>' +
-      '<div class="buttons">' +
-        '<button onclick={set("counter", String(parseInt(get("counter") || "0") + 1))}>+1</button>' +
-        '<button onclick={set("counter", String(parseInt(get("counter") || "0") - 1))}>-1</button>' +
-        '<button onclick={set("counter", "0")}>Reset</button>' +
-      '</div>' +
-      '<greeting name="Rit" />' +
-    '</div>'
-  );
-  await repo.hset('component:app', 'style',
-    '.app { padding: 1rem; } ' +
-    'h2 { color: #2563eb; margin-top: 0; } ' +
-    'p { color: #374151; } ' +
-    '.buttons { display: flex; gap: 0.5rem; margin: 1rem 0; } ' +
-    'button { padding: 0.5rem 1rem; border: 1px solid #d1d5db; border-radius: 4px; background: white; cursor: pointer; } ' +
-    'button:hover { background: #f3f4f6; }'
-  );
+    const store = new MemoryStore();
+    const refStore = new MemoryRefStore();
 
-  await repo.hset('component:greeting', 'name', 'greeting');
-  await repo.hset('component:greeting', 'template',
-    '<div class="greeting">' +
-      '<span>Hello from the {props.name} framework!</span>' +
-    '</div>'
-  );
-  await repo.hset('component:greeting', 'style',
-    '.greeting { margin-top: 1rem; padding: 0.75rem; background: #eff6ff; border-radius: 4px; color: #1e40af; }'
-  );
-  await repo.hset('component:greeting', 'props',
-    '[{"name": "name", "type": "string", "required": true}]'
-  );
+    // Fetch refs
+    const refsRes = await fetch(`${RITCAN_URL}/info/refs`, { headers: authHeaders });
+    if (!refsRes.ok) throw new Error(`Failed to fetch refs: ${refsRes.status} ${refsRes.statusText}`);
+    const refs = await refsRes.json();
 
-  // Set some data
-  await repo.set('config:title', 'Hello from Rit');
-  await repo.set('counter', '0');
+    // Pull each branch
+    for (const branch of Object.keys(refs.branches)) {
+      status.textContent = `Pulling branch: ${branch}...`;
+      const pullRes = await fetch(`${RITCAN_URL}/pull`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify({ type: 'pull-request', branch, localHash: null }),
+      });
+      if (!pullRes.ok) throw new Error(`Failed to pull ${branch}: ${pullRes.status}`);
+      const pullBody = await pullRes.json();
 
-  // Commit the initial state
-  await repo.commit('Initial app');
+      // Decode and store blocks
+      for (const block of pullBody.blocks) {
+        const binary = atob(block.data);
+        const data = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) data[i] = binary.charCodeAt(i);
+        await store.put(block.hash, data);
+      }
 
-  status.textContent = 'Loading into ReactiveStore...';
+      if (pullBody.commitHash) {
+        await refStore.setRef(`refs/heads/${branch}`, pullBody.commitHash);
+      }
+    }
 
-  // Bridge: repo -> ReactiveStore
-  const reactiveStore = await loadRepoIntoStore(repo);
+    status.textContent = 'Opening repository...';
+    const repo = await Repository.init(store, refStore);
 
-  status.textContent = 'Rendering...';
+    status.textContent = 'Loading into ReactiveStore...';
+    const reactiveStore = await loadRepoIntoStore(repo);
 
-  // Render the root component
-  const dispose = renderComponent(reactiveStore, 'app', app);
+    status.textContent = 'Rendering...';
+    renderComponent(reactiveStore, 'app', app);
 
-  status.textContent = 'Running! Click the buttons to change the counter.';
-}
-
-boot().catch(err => {
-  status.textContent = 'Error: ' + err.message;
-  console.error(err);
-});
+    status.textContent = 'Running! App sourced from RitCan.';
+  } catch (err) {
+    status.textContent = 'Error: ' + err.message;
+    authForm.style.display = 'flex';
+    console.error(err);
+  }
+};

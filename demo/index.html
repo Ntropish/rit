@@ -8,11 +8,18 @@
     body { font-family: system-ui, sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
     #app { border: 1px solid #ddd; border-radius: 8px; padding: 1rem; min-height: 200px; }
     #status { color: #666; margin-bottom: 1rem; }
+    #auth-form { margin-bottom: 1rem; display: flex; gap: 0.5rem; }
+    #auth-form input { flex: 1; padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; font-family: monospace; font-size: 0.8rem; }
+    #auth-form button { padding: 0.5rem 1rem; background: #2563eb; color: white; border: none; border-radius: 4px; cursor: pointer; }
   </style>
 </head>
 <body>
   <h1>Rit Framework Demo</h1>
-  <div id="status">Loading...</div>
+  <div id="auth-form">
+    <input type="text" id="token-input" placeholder="Paste auth token (trivorn auth token)" />
+    <button onclick="startApp()">Load App</button>
+  </div>
+  <div id="status">Paste a token and click Load App to clone from RitCan.</div>
   <div id="app"></div>
 
   <script type="module" src="/demo/boot.js"></script>
