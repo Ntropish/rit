@@ -222,22 +222,20 @@ function renderExpression(node: ExpressionNode, ctx: RenderContext): RenderResul
 // ── For expression rendering ─────────────────────────────
 
 function renderForExpression(expr: string, ctx: RenderContext): RenderResult {
-  const container = ctx.document.createDocumentFragment();
-  const marker = ctx.document.createComment('for');
-  const endMarker = ctx.document.createComment('/for');
-  container.appendChild(marker);
-  container.appendChild(endMarker);
+  // Use a container element so children can be appended immediately
+  // (comment markers fail because they're not in the DOM when the effect first runs)
+  const container = ctx.document.createElement('span');
+  container.setAttribute('data-rit-for', '');
+  container.style.display = 'contents'; // invisible wrapper
 
   const disposers: Array<() => void> = [];
   let childDisposers: Array<() => void> = [];
-  let currentNodes: Node[] = [];
 
   const dispose = effect(() => {
     // Clean up previous iteration
     for (const d of childDisposers) d();
     childDisposers = [];
-    for (const n of currentNodes) n.parentNode?.removeChild(n);
-    currentNodes = [];
+    container.textContent = '';
 
     const result = parseForExpression(expr, ctx);
     if (!result) return;
@@ -255,8 +253,7 @@ function renderForExpression(expr: string, ctx: RenderContext): RenderResult {
       const bodyResult = renderNodes(bodyAst, iterCtx);
 
       for (const n of bodyResult.nodes) {
-        endMarker.parentNode?.insertBefore(n, endMarker);
-        currentNodes.push(n);
+        container.appendChild(n);
       }
       childDisposers.push(bodyResult.dispose);
     }
@@ -264,7 +261,7 @@ function renderForExpression(expr: string, ctx: RenderContext): RenderResult {
   disposers.push(dispose);
 
   return {
-    nodes: [marker, endMarker],
+    nodes: [container],
     dispose: () => {
       for (const d of childDisposers) d();
       for (const d of disposers) d();
