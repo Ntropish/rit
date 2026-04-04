@@ -349,6 +349,23 @@ describe('roundtrip (import then project)', () => {
     expect(projected).toBe(original);
   });
 
+  it('roundtrips input elements with type attribute', async () => {
+    const store = new ReactiveStore();
+    await store.hmset('component:app', { name: 'app' });
+
+    const original = '<input type="text" placeholder="Name" />';
+    await importTemplate(store, 'app', original);
+
+    // Verify the node type is "element", not "text"
+    const rootKey = nodeKey('app', 'root');
+    expect(store.hget(rootKey, 'type')).toBe('element');
+    expect(store.hget(rootKey, 'tag')).toBe('input');
+    expect(store.hget(rootKey, 'attr-type')).toBe('text');
+
+    const projected = projectTemplate(store, 'app');
+    expect(projected).toBe(original);
+  });
+
   it('roundtrips event handlers', async () => {
     const store = new ReactiveStore();
     await store.hmset('component:app', { name: 'app' });

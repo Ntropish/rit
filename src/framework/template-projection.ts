@@ -30,6 +30,13 @@ const NON_ATTR_FIELDS = new Set([
   'nodeId',
 ]);
 
+// Reserved node entity fields that HTML attributes must not overwrite.
+// Conflicting HTML attributes are stored with an "attr-" prefix.
+const RESERVED_NODE_FIELDS = new Set([
+  'type', 'tag', 'children', 'nodeId', 'value',
+  'expr', 'collection', 'variable', 'body', 'component', 'props',
+]);
+
 // ── Project: entity tree -> template string ──────────────
 
 /**
@@ -108,11 +115,14 @@ function buildAttrString(store: ReactiveStore, key: string): string {
   const style = store.hget(key, 'style');
   if (style) parts.push(`style="${style}"`);
 
-  // Event handlers and other custom attributes from hgetall
+  // Event handlers, attr-prefixed fields, and other custom attributes
   const allFields = store.hgetall(key);
   for (const [field, value] of Object.entries(allFields)) {
     if (field.startsWith('on')) {
       parts.push(`${field}={${value}}`);
+    } else if (field.startsWith('attr-')) {
+      // Restore prefixed HTML attributes to their original names
+      parts.push(`${field.slice(5)}="${value}"`);
     } else if (!NON_ATTR_FIELDS.has(field)) {
       // Unknown fields treated as custom HTML attributes
       parts.push(`${field}="${value}"`);
@@ -359,7 +369,9 @@ async function importElementNode(
       // Event handler: onclick={expr} -> onclick: expr
       fields[attr.name] = (attr.value as ExpressionNode).expr;
     } else if (typeof attr.value === 'string') {
-      fields[attr.name] = attr.value;
+      // Prefix HTML attributes that collide with reserved node fields
+      const fieldName = RESERVED_NODE_FIELDS.has(attr.name) ? `attr-${attr.name}` : attr.name;
+      fields[fieldName] = attr.value;
     }
   }
 
@@ -579,7 +591,8 @@ async function importElementToTarget(
     } else if (attr.name.startsWith('on') && typeof attr.value !== 'string') {
       fields[attr.name] = (attr.value as ExpressionNode).expr;
     } else if (typeof attr.value === 'string') {
-      fields[attr.name] = attr.value;
+      const fieldName = RESERVED_NODE_FIELDS.has(attr.name) ? `attr-${attr.name}` : attr.name;
+      fields[fieldName] = attr.value;
     }
   }
 

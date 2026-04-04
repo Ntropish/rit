@@ -150,6 +150,9 @@ function renderElement(
       };
       el.addEventListener(eventName, handler);
       disposers.push(() => el.removeEventListener(eventName, handler));
+    } else if (field.startsWith('attr-')) {
+      // Prefixed HTML attributes (e.g., attr-type for <input type="text">)
+      el.setAttribute(field.slice(5), value);
     }
   }
 
