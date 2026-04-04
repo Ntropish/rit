@@ -130,7 +130,17 @@ await repo.hset('component:todo-add', 'style',
 await repo.hset('component:todo-detail', 'name', 'todo-detail');
 await repo.hset('component:todo-detail', 'template',
   '<div class="detail-page">' +
-    '<h1>{hget("todo:" + hget("route:params", "id"), "title")}</h1>' +
+    '<div class="edit-title">' +
+      '<input id="edit-title" type="text" value={hget("todo:" + hget("route:params", "id"), "title")} />' +
+      '<button onclick={' +
+        '(function() {' +
+          'var id = hget("route:params", "id");' +
+          'var input = event.target.ownerDocument.getElementById("edit-title");' +
+          'var title = input.value.trim();' +
+          'if (title) hset("todo:" + id, "title", title);' +
+        '})()' +
+      '}>Save Title</button>' +
+    '</div>' +
     '<p class="status">Status: {hget("todo:" + hget("route:params", "id"), "done") === "true" ? "Completed" : "Pending"}</p>' +
     '<div class="actions">' +
       '<button onclick={' +
@@ -152,7 +162,10 @@ await repo.hset('component:todo-detail', 'template',
 );
 await repo.hset('component:todo-detail', 'style',
   '.detail-page { max-width: 600px; margin: 0 auto; padding: 1rem; font-family: system-ui, sans-serif; } ' +
-  'h1 { color: #1f2937; } ' +
+  '.edit-title { display: flex; gap: 0.75rem; align-items: center; margin-bottom: 1rem; } ' +
+  '.edit-title input { flex: 1; padding: 0.75rem; border: 1px solid #d1d5db; border-radius: 6px; font-size: 1.25rem; font-weight: bold; color: #1f2937; } ' +
+  '.edit-title button { padding: 0.5rem 1rem; background: #059669; color: white; border: none; border-radius: 6px; cursor: pointer; white-space: nowrap; } ' +
+  '.edit-title button:hover { background: #047857; } ' +
   '.status { color: #6b7280; } ' +
   '.actions { display: flex; gap: 1rem; align-items: center; margin-top: 1rem; } ' +
   'button { padding: 0.5rem 1rem; background: #2563eb; color: white; border: none; border-radius: 6px; cursor: pointer; } ' +
