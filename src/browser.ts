@@ -57,3 +57,8 @@ export {
 } from './framework/index.js';
 
 export { loadRepoIntoStore } from './framework/bridge.js';
+
+export {
+  Router, createRouter, loadRoutes,
+  type RouteEntity, type RouteMatch,
+} from './framework/router.js';

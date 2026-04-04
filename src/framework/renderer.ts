@@ -27,6 +27,8 @@ export interface RenderContext {
   document: Document;
   /** Set of registered component names. */
   components: Set<string>;
+  /** Additional variables injected into the expression scope. */
+  extraScope?: Record<string, unknown>;
 }
 
 export interface RenderResult {
@@ -323,6 +325,7 @@ export function evaluateExpression(expr: string, ctx: RenderContext, event?: Eve
 
     props,
     event,
+    ...(ctx.extraScope ?? {}),
   };
 
   try {

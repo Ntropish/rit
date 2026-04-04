@@ -32,3 +32,11 @@ export {
 } from './renderer.js';
 
 export { loadRepoIntoStore } from './bridge.js';
+
+export {
+  Router,
+  createRouter,
+  loadRoutes,
+  type RouteEntity,
+  type RouteMatch,
+} from './router.js';

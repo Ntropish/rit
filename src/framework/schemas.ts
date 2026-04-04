@@ -25,6 +25,7 @@ export const routeSchema: EntitySchema = {
     name:      { type: 'string', required: true },
     path:      { type: 'string', required: true },
     component: { type: 'ref', required: true, refTarget: 'component' },
+    parent:    { type: 'ref', refTarget: 'route' },
   },
 };
 
