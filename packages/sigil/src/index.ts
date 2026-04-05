@@ -25,6 +25,14 @@ export {
 } from './compiler.js';
 
 export {
+  materializeToDir,
+  projectFromDir,
+  syncStatus,
+  type SyncFile,
+  type SyncStatus,
+} from './file-sync.js';
+
+export {
   buildModuleGraph,
   topologicalOrder,
   resolveSpecifier,
