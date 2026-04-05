@@ -72,18 +72,41 @@ export function renderEntityComponent(
     const bindComp = resolveComponent(store, refComponent);
     if (!bindComp) continue;
 
-    // Collect prop.* fields from the bind entity
+    // Collect prop.* fields from the bind entity as raw expressions
     const bindFields = store.hgetall(bk);
-    const bindProps: Record<string, string> = {};
+    const propExprs: Record<string, string> = {};
     for (const [field, value] of Object.entries(bindFields)) {
       if (field.startsWith('prop.')) {
-        bindProps[field.slice(5)] = value;
+        propExprs[field.slice(5)] = value;
       }
     }
 
+    // Create reactive props: each access evaluates the expression in the
+    // parent's context, so store reads are tracked by the calling effect/computed.
+    const parentCtx: RenderContext = { store, props, document, components, extraScope };
+    const reactiveProps = new Proxy({} as Record<string, string>, {
+      get(_, prop: string) {
+        const expr = propExprs[prop];
+        if (expr === undefined) return undefined;
+        const result = evaluateExpression(expr, parentCtx);
+        return result != null ? String(result) : '';
+      },
+      has(_, prop: string) {
+        return prop in propExprs;
+      },
+      ownKeys() {
+        return Object.keys(propExprs);
+      },
+      getOwnPropertyDescriptor(_, prop: string) {
+        if (prop in propExprs) {
+          return { configurable: true, enumerable: true, value: undefined };
+        }
+        return undefined;
+      },
+    });
+
     // Mount the headless component's reactive primitives
-    const bindCtx: RenderContext = { store, props, document, components };
-    const mounted = mountHeadlessComponent(store, refComponent, bindProps, bindCtx);
+    const mounted = mountHeadlessComponent(store, refComponent, reactiveProps, parentCtx);
 
     // Expose the headless component's scope under the bind name
     extraScope[bindName] = mounted.scope;

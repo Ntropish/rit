@@ -660,7 +660,7 @@ describe('Entity-tree renderer', () => {
       });
       await store.hmset('component:app.bind:greeter', {
         component: 'use-greeter',
-        'prop.name': 'World',
+        'prop.name': '"World"',
       });
 
       const container = document.createElement('div');
@@ -782,6 +782,41 @@ describe('Entity-tree renderer', () => {
 
       // Without expose, everything is visible (backwards compatible)
       expect(container.textContent).toBe('42');
+      dispose();
+    });
+
+    it('reacts to prop expression changes', async () => {
+      const store = new ReactiveStore();
+
+      // Store data that the prop expression reads
+      await store.set('username', 'Alice');
+
+      // Headless component that uses a prop in a computed
+      await store.hmset('component:use-greeter', { name: 'use-greeter' });
+      await store.hmset('component:use-greeter.computed:message', {
+        expr: '"Hello, " + props.name',
+      });
+
+      // Parent component: prop expression reads from store
+      await setComponent(store, 'app', 'root');
+      await setNode(store, 'app', 'root', {
+        type: 'expression',
+        expr: 'greeter.message.value',
+      });
+      await store.hmset('component:app.bind:greeter', {
+        component: 'use-greeter',
+        'prop.name': 'get("username")',
+      });
+
+      const container = document.createElement('div');
+      const dispose = renderEntityComponent(store, 'app', container);
+
+      expect(container.textContent).toBe('Hello, Alice');
+
+      // Change the store data that the prop expression depends on
+      await store.set('username', 'Bob');
+      expect(container.textContent).toBe('Hello, Bob');
+
       dispose();
     });
 
