@@ -670,6 +670,91 @@ describe('Entity-tree renderer', () => {
       dispose();
     });
 
+    it('respects expose declaration on headless component', async () => {
+      const store = new ReactiveStore();
+
+      // Headless component: exposes only 'doubled', not 'count'
+      await store.hmset('component:use-doubler', {
+        name: 'use-doubler',
+        expose: 'doubled',
+      });
+      await store.hmset('component:use-doubler.signal:count', { value: '5' });
+      await store.hmset('component:use-doubler.computed:doubled', {
+        expr: 'count.value * 2',
+      });
+
+      // Parent component tries to read exposed value
+      await setComponent(store, 'app', 'root');
+      await setNode(store, 'app', 'root', {
+        type: 'expression',
+        expr: 'doubler.doubled.value',
+      });
+      await store.hmset('component:app.bind:doubler', {
+        component: 'use-doubler',
+      });
+
+      const container = document.createElement('div');
+      const dispose = renderEntityComponent(store, 'app', container);
+
+      expect(container.textContent).toBe('10');
+      dispose();
+    });
+
+    it('hides non-exposed values from parent', async () => {
+      const store = new ReactiveStore();
+
+      // Headless component: exposes only 'doubled', not 'count'
+      await store.hmset('component:use-doubler', {
+        name: 'use-doubler',
+        expose: 'doubled',
+      });
+      await store.hmset('component:use-doubler.signal:count', { value: '5' });
+      await store.hmset('component:use-doubler.computed:doubled', {
+        expr: 'count.value * 2',
+      });
+
+      // Parent component tries to read internal (non-exposed) value
+      await setComponent(store, 'app', 'root');
+      await setNode(store, 'app', 'root', {
+        type: 'expression',
+        expr: 'doubler.count',
+      });
+      await store.hmset('component:app.bind:doubler', {
+        component: 'use-doubler',
+      });
+
+      const container = document.createElement('div');
+      const dispose = renderEntityComponent(store, 'app', container);
+
+      // count should not be accessible; expression returns null/undefined
+      expect(container.textContent).toBe('');
+      dispose();
+    });
+
+    it('exposes everything when no expose declaration', async () => {
+      const store = new ReactiveStore();
+
+      // Headless component with no expose field
+      await store.hmset('component:use-counter', { name: 'use-counter' });
+      await store.hmset('component:use-counter.signal:count', { value: '42' });
+
+      await setComponent(store, 'app', 'root');
+      await setNode(store, 'app', 'root', {
+        type: 'expression',
+        expr: 'counter.count.value',
+      });
+      await store.hmset('component:app.bind:counter', {
+        component: 'use-counter',
+      });
+
+      const container = document.createElement('div');
+      const dispose = renderEntityComponent(store, 'app', container);
+
+      // Without expose, everything is visible (backwards compatible)
+      expect(container.textContent).toBe('42');
+      dispose();
+    });
+
     it('ignores bind referencing unknown component', async () => {
       const store = new ReactiveStore();
 

@@ -382,6 +382,24 @@ function mountHeadlessComponent(
     disposers.push(dispose);
   }
 
+  // Filter scope by expose declaration
+  const exposeRaw = store.hget(`component:${componentName}`, 'expose');
+  if (exposeRaw) {
+    const exposed = exposeRaw.split(',').map(s => s.trim()).filter(Boolean);
+    const filteredScope: Record<string, unknown> = {};
+    for (const name of exposed) {
+      if (name in scope) {
+        filteredScope[name] = scope[name];
+      }
+    }
+    return {
+      scope: filteredScope,
+      dispose: () => {
+        for (const d of disposers) d();
+      },
+    };
+  }
+
   return {
     scope,
     dispose: () => {

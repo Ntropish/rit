@@ -16,6 +16,7 @@ export const componentSchema: EntitySchema = {
     root:     { type: 'string' },
     style:    { type: 'string', format: 'code:css' },
     props:    { type: 'string', format: 'code:json' },
+    expose:   { type: 'string', label: 'Comma-separated names of exposed values (headless components)' },
   },
 };
 
