@@ -14,7 +14,7 @@ import { httpClone } from '../src/sync/http-client.js';
 import { MemoryStore } from '../src/store/memory.js';
 import { MemoryRefStore } from '../src/commit/index.js';
 import { storeSchema } from '../packages/rit-schema/src/index.js';
-import { componentSchema, nodeSchema, routeSchema } from '../src/framework/schemas.js';
+import { componentSchema, nodeSchema, routeSchema, querySchema } from '../src/framework/schemas.js';
 import { migrateAllComponents } from '../src/framework/template-projection.js';
 
 const RITCAN_URL = 'https://ritcan.trivorn.org/api/repos/todo';
@@ -64,6 +64,7 @@ await repo.hset('component:todo-list', 'template',
       '<h1>Todo List</h1>' +
       '<a href="/add" class="add-btn">+ Add Todo</a>' +
     '</header>' +
+    '<weather-widget />' +
     '<div class="summary">{smembers("todo:ids").length} todos</div>' +
     '{for(smembers("todo:ids"), id => ' +
       '<div class="todo-item">' +
@@ -181,6 +182,40 @@ await repo.hset('component:todo-detail', 'style',
   'a:hover { color: #1f2937; }'
 );
 
+// ── Weather widget component ─────────────────────────────
+
+await repo.hset('component:weather-widget', 'name', 'weather-widget');
+await repo.hset('component:weather-widget', 'template',
+  '<div class="weather-widget">' +
+    '<div class="weather-label">Weather (Seattle)</div>' +
+    '<div class="weather-body">{' +
+      '(function() {' +
+        'var w = query("weather", {lat: "47.61", lon: "-122.33"});' +
+        'if (w.status === "loading" || w.status === "idle") return "Loading...";' +
+        'if (w.status === "error") return "Error: " + w.error;' +
+        'var d = w.data;' +
+        'if (!d || !d.current) return "No data";' +
+        'return d.current.temperature_2m + d.current_units.temperature_2m' +
+          ' + "  \\u2022  Wind: " + d.current.wind_speed_10m + " " + d.current_units.wind_speed_10m;' +
+      '})()' +
+    '}</div>' +
+  '</div>'
+);
+await repo.hset('component:weather-widget', 'style',
+  '.weather-widget { background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 6px; padding: 0.75rem 1rem; margin-bottom: 1rem; } ' +
+  '.weather-label { font-size: 0.8rem; color: #0369a1; font-weight: 600; margin-bottom: 0.25rem; } ' +
+  '.weather-body { color: #1f2937; font-size: 0.95rem; }'
+);
+
+// ── Weather query entity ─────────────────────────────────
+
+await repo.hset('query:weather', 'name', 'weather');
+await repo.hset('query:weather', 'url', 'https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,wind_speed_10m,weather_code');
+await repo.hset('query:weather', 'method', 'GET');
+await repo.hset('query:weather', 'staleTime', '300000');   // 5 min fresh
+await repo.hset('query:weather', 'cacheTime', '1800000');  // 30 min before GC
+await repo.hset('query:weather', 'refetchInterval', '600000'); // 10 min periodic
+
 // ── Routes (flat) ─────────────────────────────────────────
 
 await repo.hset('route:home', 'name', 'home');
@@ -208,7 +243,7 @@ await repo.hset('todo:3', 'done', 'false');
 // ── Migrate templates to entity-based ─────────────────────
 
 // Clear stale data from previous migrations: root fields and all node entities.
-for (const name of ['todo-list', 'todo-add', 'todo-detail']) {
+for (const name of ['todo-list', 'todo-add', 'todo-detail', 'weather-widget']) {
   await repo.hdel(`component:${name}`, 'root');
   const prefix = `component:${name}.node:`;
   for await (const key of repo.keys(`component:${name}.*`)) {
@@ -224,6 +259,7 @@ console.log(`Migrated ${migrated.length} components to entity-based templates:`,
 await storeSchema(repo, componentSchema, 'UI component with template or entity-based root, style, and props');
 await storeSchema(repo, nodeSchema, 'Template node entity (element, text, expression, for, component-ref)');
 await storeSchema(repo, routeSchema, 'URL-to-component mapping');
+await storeSchema(repo, querySchema, 'External API query config with fetch/transform/cache');
 
 // ── Commit and push ───────────────────────────────────────
 

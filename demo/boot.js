@@ -14,6 +14,7 @@ import {
   loadRepoIntoStore,
   loadRepoOverlay,
   createRouter,
+  QueryEngine,
 } from '../dist/rit-runtime.js';
 
 const AUTH_ISSUER = 'https://auth.trivorn.org';
@@ -223,9 +224,12 @@ async function boot() {
       scheduleCommit();
     };
 
-    // ── 5. Render ─────────────────────────────────────────
+    // ── 5. Start query engine and render ───────────────────
     status.textContent = '';
-    await createRouter(reactiveStore, app);
+    const queryEngine = new QueryEngine(reactiveStore);
+    await createRouter(reactiveStore, app, undefined, {
+      query: (name, params) => queryEngine.query(name, params),
+    });
 
   } catch (err) {
     status.textContent = 'Error: ' + err.message;
