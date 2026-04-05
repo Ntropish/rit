@@ -9,9 +9,12 @@ import {
   routeSchema,
   querySchema,
   configSchema,
+  interfaceSchema,
   frameworkSchemas,
   resolveComponent,
   listComponents,
+  resolveInterface,
+  validateInterface,
 } from '../framework/index.js';
 
 describe('Framework schemas', () => {
@@ -194,7 +197,8 @@ describe('Framework schemas', () => {
       expect(registry.get('route')).toBe(routeSchema);
       expect(registry.get('query')).toBe(querySchema);
       expect(registry.get('config')).toBe(configSchema);
-      expect(registry.list()).toHaveLength(5);
+      expect(registry.get('interface')).toBe(interfaceSchema);
+      expect(registry.list()).toHaveLength(6);
     });
   });
 });
@@ -344,6 +348,80 @@ describe('Component resolver', () => {
     it('returns empty array when no components exist', () => {
       const store = new ReactiveStore();
       expect(listComponents(store)).toEqual([]);
+    });
+  });
+
+  describe('Interface validation', () => {
+    it('resolves an interface entity', async () => {
+      const store = new ReactiveStore();
+      await store.hmset('interface:data-fetcher', {
+        name: 'data-fetcher',
+        'prop.queryName': 'string',
+        'prop.token': 'string',
+        'expose.data': 'any',
+        'expose.status': 'string',
+      });
+
+      const iface = resolveInterface(store, 'data-fetcher');
+      expect(iface).not.toBeNull();
+      expect(iface!.props).toEqual({ queryName: 'string', token: 'string' });
+      expect(iface!.exposes).toEqual({ data: 'any', status: 'string' });
+    });
+
+    it('returns null for nonexistent interface', () => {
+      const store = new ReactiveStore();
+      expect(resolveInterface(store, 'missing')).toBeNull();
+    });
+
+    it('validates a conformant component', async () => {
+      const store = new ReactiveStore();
+      await store.hmset('interface:data-fetcher', {
+        name: 'data-fetcher',
+        'expose.data': 'any',
+        'expose.status': 'string',
+      });
+      await store.hmset('component:use-query', {
+        name: 'use-query',
+        expose: 'data,status,error',
+        implements: 'data-fetcher',
+      });
+
+      const violations = validateInterface(store, 'use-query', 'data-fetcher');
+      expect(violations).toEqual([]);
+    });
+
+    it('detects missing exposed values', async () => {
+      const store = new ReactiveStore();
+      await store.hmset('interface:data-fetcher', {
+        name: 'data-fetcher',
+        'expose.data': 'any',
+        'expose.status': 'string',
+        'expose.error': 'string',
+      });
+      await store.hmset('component:use-query', {
+        name: 'use-query',
+        expose: 'data',
+      });
+
+      const violations = validateInterface(store, 'use-query', 'data-fetcher');
+      expect(violations.length).toBe(2);
+      expect(violations.map(v => v.name).sort()).toEqual(['error', 'status']);
+      expect(violations[0].type).toBe('missing_expose');
+    });
+
+    it('validates renamed expose fields against interface', async () => {
+      const store = new ReactiveStore();
+      await store.hmset('interface:data-fetcher', {
+        name: 'data-fetcher',
+        'expose.result': 'any',
+      });
+      await store.hmset('component:use-query', {
+        name: 'use-query',
+        'expose.result': 'data',
+      });
+
+      const violations = validateInterface(store, 'use-query', 'data-fetcher');
+      expect(violations).toEqual([]);
     });
   });
 });

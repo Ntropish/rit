@@ -76,6 +76,90 @@ export function listComponents(store: ReactiveStore): string[] {
   return names;
 }
 
+// ── Interface validation ─────────────────────────────────
+
+export interface InterfaceViolation {
+  interfaceName: string;
+  type: 'missing_prop' | 'missing_expose';
+  name: string;
+  expectedType: string;
+}
+
+/**
+ * Resolve an interface entity by name from the store.
+ * Returns the prop and expose declarations, or null if the interface doesn't exist.
+ */
+export function resolveInterface(
+  store: ReactiveStore,
+  name: string,
+): { props: Record<string, string>; exposes: Record<string, string> } | null {
+  const key = `interface:${name}`;
+  const entityName = store.hget(key, 'name');
+  if (entityName === null) return null;
+
+  const fields = store.hgetall(key);
+  const props: Record<string, string> = {};
+  const exposes: Record<string, string> = {};
+
+  for (const [field, value] of Object.entries(fields)) {
+    if (field.startsWith('prop.')) {
+      props[field.slice(5)] = value;
+    } else if (field.startsWith('expose.')) {
+      exposes[field.slice(7)] = value;
+    }
+  }
+
+  return { props, exposes };
+}
+
+/**
+ * Validate that a component conforms to an interface.
+ * Returns an array of violations (empty if conformant).
+ */
+export function validateInterface(
+  store: ReactiveStore,
+  componentName: string,
+  interfaceName: string,
+): InterfaceViolation[] {
+  const iface = resolveInterface(store, interfaceName);
+  if (!iface) return [];
+
+  const violations: InterfaceViolation[] = [];
+  const compKey = `component:${componentName}`;
+  const compFields = store.hgetall(compKey);
+
+  // Check required props: the component should accept these props
+  // (validated against signal/computed/effect sub-entities that reference props)
+  // For now, just check that the interface's prop names are documented.
+  // Full validation would require runtime checking.
+
+  // Check expose conformance: the component should expose these names
+  const exposeRaw = compFields.expose ?? '';
+  const exposedNames = new Set(
+    exposeRaw.split(',').map(s => s.trim()).filter(Boolean)
+  );
+
+  // Also check expose.* fields for renamed exports
+  for (const [field, value] of Object.entries(compFields)) {
+    if (field.startsWith('expose.')) {
+      exposedNames.add(field.slice(7)); // the external name
+    }
+  }
+
+  for (const [exposeName, exposeType] of Object.entries(iface.exposes)) {
+    if (!exposedNames.has(exposeName)) {
+      violations.push({
+        interfaceName,
+        type: 'missing_expose',
+        name: exposeName,
+        expectedType: exposeType,
+      });
+    }
+  }
+
+  return violations;
+}
+
 // ── Props parsing ────────────────────────────────────────
 
 /**

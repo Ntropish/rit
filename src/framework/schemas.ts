@@ -17,6 +17,7 @@ export const componentSchema: EntitySchema = {
     style:    { type: 'string', format: 'code:css' },
     props:    { type: 'string', format: 'code:json' },
     expose:   { type: 'string', label: 'Comma-separated names of exposed values (headless components)' },
+    implements: { type: 'string', label: 'Comma-separated interface names this component conforms to' },
   },
 };
 
@@ -109,6 +110,16 @@ export const configSchema: EntitySchema = {
   },
 };
 
+export const interfaceSchema: EntitySchema = {
+  prefix: 'interface',
+  identity: ['name'],
+  fields: {
+    name: { type: 'string', required: true },
+    // Prop declarations use prop.* fields: prop.queryName: string
+    // Expose declarations use expose.* fields: expose.data: any
+  },
+};
+
 /** All framework schemas for bulk registration. */
 export const frameworkSchemas: EntitySchema[] = [
   componentSchema,
@@ -116,4 +127,5 @@ export const frameworkSchemas: EntitySchema[] = [
   routeSchema,
   querySchema,
   configSchema,
+  interfaceSchema,
 ];

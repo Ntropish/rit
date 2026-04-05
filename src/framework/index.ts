@@ -5,14 +5,18 @@ export {
   routeSchema,
   querySchema,
   configSchema,
+  interfaceSchema,
   frameworkSchemas,
 } from './schemas.js';
 
 export {
   resolveComponent,
   listComponents,
+  resolveInterface,
+  validateInterface,
   type ResolvedComponent,
   type PropDef,
+  type InterfaceViolation,
 } from './resolver.js';
 
 export {
