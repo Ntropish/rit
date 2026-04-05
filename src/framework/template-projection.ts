@@ -30,12 +30,8 @@ const NON_ATTR_FIELDS = new Set([
   'nodeId',
 ]);
 
-// Reserved node entity fields that HTML attributes must not overwrite.
-// Conflicting HTML attributes are stored with an "attr-" prefix.
-const RESERVED_NODE_FIELDS = new Set([
-  'type', 'tag', 'children', 'nodeId', 'value',
-  'expr', 'collection', 'variable', 'body', 'component', 'props',
-]);
+/** Prefix for all HTML attributes stored on node entities. */
+const ATTR_PREFIX = 'attr.';
 
 // ── Project: entity tree -> template string ──────────────
 
@@ -105,27 +101,14 @@ function projectElement(
 function buildAttrString(store: ReactiveStore, key: string): string {
   const parts: string[] = [];
 
-  // Standard attributes
-  const cls = store.hget(key, 'class');
-  if (cls) parts.push(`class="${cls}"`);
-
-  const id = store.hget(key, 'id');
-  if (id) parts.push(`id="${id}"`);
-
-  const style = store.hget(key, 'style');
-  if (style) parts.push(`style="${style}"`);
-
-  // Event handlers, attr-prefixed fields, and other custom attributes
+  // Read all fields; emit attr.* as HTML attributes and on* as event handlers
   const allFields = store.hgetall(key);
   for (const [field, value] of Object.entries(allFields)) {
-    if (field.startsWith('on')) {
+    if (field.startsWith(ATTR_PREFIX)) {
+      const attrName = field.slice(ATTR_PREFIX.length);
+      parts.push(`${attrName}="${value}"`);
+    } else if (field.startsWith('on')) {
       parts.push(`${field}={${value}}`);
-    } else if (field.startsWith('attr-')) {
-      // Restore prefixed HTML attributes to their original names
-      parts.push(`${field.slice(5)}="${value}"`);
-    } else if (!NON_ATTR_FIELDS.has(field)) {
-      // Unknown fields treated as custom HTML attributes
-      parts.push(`${field}="${value}"`);
     }
   }
 
@@ -351,27 +334,16 @@ async function importElementNode(
     tag: node.tag,
   };
 
-  // Process attributes
+  // Process attributes: all HTML attributes go under attr.* namespace
   for (const attr of node.attrs) {
-    if (attr.name === 'class') {
-      fields.class = typeof attr.value === 'string'
-        ? attr.value
-        : `\${${(attr.value as ExpressionNode).expr}}`;
-    } else if (attr.name === 'id') {
-      fields.id = typeof attr.value === 'string'
-        ? attr.value
-        : `\${${(attr.value as ExpressionNode).expr}}`;
-    } else if (attr.name === 'style') {
-      fields.style = typeof attr.value === 'string'
-        ? attr.value
-        : `\${${(attr.value as ExpressionNode).expr}}`;
-    } else if (attr.name.startsWith('on') && typeof attr.value !== 'string') {
-      // Event handler: onclick={expr} -> onclick: expr
+    if (attr.name.startsWith('on') && typeof attr.value !== 'string') {
+      // Event handler: onclick={expr} -> onclick: expr (no prefix)
       fields[attr.name] = (attr.value as ExpressionNode).expr;
     } else if (typeof attr.value === 'string') {
-      // Prefix HTML attributes that collide with reserved node fields
-      const fieldName = RESERVED_NODE_FIELDS.has(attr.name) ? `attr-${attr.name}` : attr.name;
-      fields[fieldName] = attr.value;
+      fields[`${ATTR_PREFIX}${attr.name}`] = attr.value;
+    } else {
+      // Dynamic attribute with expression value
+      fields[`${ATTR_PREFIX}${attr.name}`] = `\${${(attr.value as ExpressionNode).expr}}`;
     }
   }
 
@@ -584,15 +556,12 @@ async function importElementToTarget(
   };
 
   for (const attr of node.attrs) {
-    if (attr.name === 'class' || attr.name === 'id' || attr.name === 'style') {
-      fields[attr.name] = typeof attr.value === 'string'
-        ? attr.value
-        : `\${${(attr.value as ExpressionNode).expr}}`;
-    } else if (attr.name.startsWith('on') && typeof attr.value !== 'string') {
+    if (attr.name.startsWith('on') && typeof attr.value !== 'string') {
       fields[attr.name] = (attr.value as ExpressionNode).expr;
     } else if (typeof attr.value === 'string') {
-      const fieldName = RESERVED_NODE_FIELDS.has(attr.name) ? `attr-${attr.name}` : attr.name;
-      fields[fieldName] = attr.value;
+      fields[`${ATTR_PREFIX}${attr.name}`] = attr.value;
+    } else {
+      fields[`${ATTR_PREFIX}${attr.name}`] = `\${${(attr.value as ExpressionNode).expr}}`;
     }
   }
 

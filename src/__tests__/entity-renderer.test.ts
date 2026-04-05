@@ -58,7 +58,7 @@ describe('Entity-tree renderer', () => {
       await setNode(store, 'app', 'root', {
         type: 'element',
         tag: 'div',
-        class: 'app',
+        'attr.class': 'app',
       });
 
       const container = document.createElement('div');
@@ -80,7 +80,7 @@ describe('Entity-tree renderer', () => {
       await setNode(store, 'app', 'heading', {
         type: 'element',
         tag: 'h1',
-        class: 'title',
+        'attr.class': 'title',
       });
 
       const container = document.createElement('div');
@@ -97,7 +97,7 @@ describe('Entity-tree renderer', () => {
       await setNode(store, 'app', 'root', {
         type: 'element',
         tag: 'section',
-        id: 'main',
+        'attr.id': 'main',
       });
 
       const container = document.createElement('div');
@@ -114,7 +114,7 @@ describe('Entity-tree renderer', () => {
       await setNode(store, 'app', 'root', {
         type: 'element',
         tag: 'div',
-        style: 'color: red',
+        'attr.style': 'color: red',
       });
 
       const container = document.createElement('div');
@@ -394,17 +394,17 @@ describe('Entity-tree renderer', () => {
       await setNode(store, 'app', 'root', {
         type: 'element',
         tag: 'div',
-        class: 'original',
+        'attr.class': 'original',
       });
 
       const container = document.createElement('div');
       const dispose = renderEntityComponent(store, 'app', container);
 
       const div = container.querySelector('div');
-      expect(div?.className).toBe('original');
+      expect(div?.getAttribute('class')).toBe('original');
 
-      await store.hset(nodeKey('app', 'root'), 'class', 'updated');
-      expect(div?.className).toBe('updated');
+      await store.hset(nodeKey('app', 'root'), 'attr.class', 'updated');
+      expect(div?.getAttribute('class')).toBe('updated');
       dispose();
     });
 
@@ -464,7 +464,7 @@ describe('Entity-tree renderer', () => {
       await setNode(store, 'card', 'root', {
         type: 'element',
         tag: 'div',
-        class: 'card',
+        'attr.class': 'card',
       });
 
       const container = document.createElement('div');

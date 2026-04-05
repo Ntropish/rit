@@ -116,30 +116,26 @@ function renderElement(
   const el = ctx.document.createElement(tag);
   const disposers: Array<() => void> = [];
 
-  // Reactive class attribute
+  // Reactive HTML attributes: re-reads all attr.* fields when any field changes.
+  let prevAttrs = new Set<string>();
   disposers.push(effect(() => {
-    const cls = ctx.store.hget(key, 'class');
-    if (cls) el.className = cls;
-    else el.className = '';
+    const allFields = ctx.store.hgetall(key);
+    const currentAttrs = new Set<string>();
+    for (const [field, value] of Object.entries(allFields)) {
+      if (field.startsWith('attr.')) {
+        const attrName = field.slice(5);
+        el.setAttribute(attrName, value);
+        currentAttrs.add(attrName);
+      }
+    }
+    // Remove attributes that were present before but are now gone
+    for (const attr of prevAttrs) {
+      if (!currentAttrs.has(attr)) el.removeAttribute(attr);
+    }
+    prevAttrs = currentAttrs;
   }));
 
-  // Reactive style attribute
-  disposers.push(effect(() => {
-    const style = ctx.store.hget(key, 'style');
-    if (style) el.setAttribute('style', style);
-    else el.removeAttribute('style');
-  }));
-
-  // Reactive id attribute
-  disposers.push(effect(() => {
-    const id = ctx.store.hget(key, 'id');
-    if (id) el.id = id;
-    else el.removeAttribute('id');
-  }));
-
-  // Event handlers: read all fields, bind on* handlers.
-  // Event bindings are set up once (not reactive); to change event
-  // handlers, the node must be re-rendered via a parent effect.
+  // Event handlers: read once, bind on* handlers.
   const allFields = ctx.store.hgetall(key);
   for (const [field, value] of Object.entries(allFields)) {
     if (field.startsWith('on')) {
@@ -150,9 +146,6 @@ function renderElement(
       };
       el.addEventListener(eventName, handler);
       disposers.push(() => el.removeEventListener(eventName, handler));
-    } else if (field.startsWith('attr-')) {
-      // Prefixed HTML attributes (e.g., attr-type for <input type="text">)
-      el.setAttribute(field.slice(5), value);
     }
   }
 

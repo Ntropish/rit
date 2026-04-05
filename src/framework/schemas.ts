@@ -27,10 +27,7 @@ export const nodeSchema: EntitySchema = {
     type:       { type: 'enum', required: true, values: 'element,text,expression,for,component-ref' },
     // Element fields
     tag:        { type: 'string' },
-    class:      { type: 'string' },
-    style:      { type: 'string' },
-    id:         { type: 'string' },
-    children:   { type: 'string' },
+    children:   { type: 'string', label: 'Comma-separated child node IDs' },
     // Text field
     value:      { type: 'string' },
     // Expression field
@@ -42,6 +39,9 @@ export const nodeSchema: EntitySchema = {
     // Component-ref fields
     component:  { type: 'ref', refTarget: 'component' },
     props:      { type: 'string', format: 'code:json' },
+    // HTML attributes are stored under attr.* fields (attr.class, attr.id,
+    // attr.style, attr.type, etc.) and are not part of this schema definition.
+    // Event handlers are stored as on* fields (onclick, oninput, etc.).
   },
 };
 

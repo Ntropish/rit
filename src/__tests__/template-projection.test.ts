@@ -48,7 +48,7 @@ describe('projectTemplate', () => {
     await setNode(store, 'app', 'root', {
       type: 'element',
       tag: 'div',
-      class: 'app',
+      'attr.class': 'app',
     });
 
     expect(projectTemplate(store, 'app')).toBe('<div class="app" />');
@@ -105,9 +105,9 @@ describe('projectTemplate', () => {
     await setNode(store, 'app', 'root', {
       type: 'element',
       tag: 'div',
-      class: 'card',
-      id: 'main',
-      style: 'color: red',
+      'attr.class': 'card',
+      'attr.id': 'main',
+      'attr.style': 'color: red',
     });
 
     const result = projectTemplate(store, 'app')!;
@@ -203,7 +203,7 @@ describe('importTemplate', () => {
     const rootKey = nodeKey('app', 'root');
     expect(store.hget(rootKey, 'type')).toBe('element');
     expect(store.hget(rootKey, 'tag')).toBe('div');
-    expect(store.hget(rootKey, 'class')).toBe('app');
+    expect(store.hget(rootKey, 'attr.class')).toBe('app');
   });
 
   it('imports nested elements', async () => {
@@ -360,7 +360,7 @@ describe('roundtrip (import then project)', () => {
     const rootKey = nodeKey('app', 'root');
     expect(store.hget(rootKey, 'type')).toBe('element');
     expect(store.hget(rootKey, 'tag')).toBe('input');
-    expect(store.hget(rootKey, 'attr-type')).toBe('text');
+    expect(store.hget(rootKey, 'attr.type')).toBe('text');
 
     const projected = projectTemplate(store, 'app');
     expect(projected).toBe(original);
@@ -400,7 +400,7 @@ describe('migrateComponent', () => {
     // Node entities exist
     expect(store.hget(nodeKey('header', 'root'), 'type')).toBe('element');
     expect(store.hget(nodeKey('header', 'root'), 'tag')).toBe('h1');
-    expect(store.hget(nodeKey('header', 'root'), 'class')).toBe('title');
+    expect(store.hget(nodeKey('header', 'root'), 'attr.class')).toBe('title');
 
     // Projection roundtrips
     expect(projectTemplate(store, 'header')).toBe('<h1 class="title">Hello</h1>');
