@@ -9,7 +9,7 @@
  * a node's fields triggers re-render of the affected DOM. Children lists
  * are reactive: adding or removing child IDs updates the DOM tree.
  *
- * Node types: element, text, expression, for, component-ref.
+ * Node types: element, text, expression, for, let, component-ref.
  */
 
 import { effect } from '../reactive/signals.js';
@@ -95,6 +95,8 @@ export function renderEntityNode(
       return renderExpression(key, ctx);
     case 'for':
       return renderFor(componentName, key, ctx);
+    case 'let':
+      return renderLet(componentName, key, ctx);
     case 'component-ref':
       return renderComponentRef(key, ctx);
     default: {
@@ -246,6 +248,58 @@ function renderFor(
       const bodyResult = renderEntityNode(componentName, bodyNodeId, iterCtx);
       for (const n of bodyResult.nodes) container.appendChild(n);
       childDisposers.push(bodyResult.dispose);
+    }
+  }));
+
+  return {
+    nodes: [container],
+    dispose: () => {
+      for (const d of childDisposers) d();
+      for (const d of disposers) d();
+    },
+  };
+}
+
+// ── Let ─────────────────────────────────────────────────
+
+function renderLet(
+  componentName: string,
+  key: string,
+  ctx: RenderContext,
+): RenderResult {
+  const container = ctx.document.createElement('span');
+  container.setAttribute('data-rit-let', '');
+  container.style.display = 'contents';
+
+  const disposers: Array<() => void> = [];
+  let childDisposers: Array<() => void> = [];
+
+  disposers.push(effect(() => {
+    // Clean up previous children
+    for (const d of childDisposers) d();
+    childDisposers = [];
+    container.textContent = '';
+
+    const expr = ctx.store.hget(key, 'expr');
+    const variable = ctx.store.hget(key, 'variable');
+    const childrenStr = ctx.store.hget(key, 'children');
+
+    if (!expr || !variable) return;
+
+    const value = evaluateExpression(expr, ctx);
+
+    const letCtx: RenderContext = {
+      ...ctx,
+      extraScope: { ...(ctx.extraScope ?? {}), [variable]: value },
+    };
+
+    if (!childrenStr) return;
+
+    const childIds = childrenStr.split(',').map(s => s.trim()).filter(Boolean);
+    for (const childId of childIds) {
+      const childResult = renderEntityNode(componentName, childId, letCtx);
+      for (const n of childResult.nodes) container.appendChild(n);
+      childDisposers.push(childResult.dispose);
     }
   }));
 
