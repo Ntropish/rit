@@ -15,3 +15,12 @@ export {
 export {
   materialize,
 } from './materializer.js';
+
+export {
+  buildModuleGraph,
+  topologicalOrder,
+  resolveSpecifier,
+  type ModuleInfo,
+  type ImportInfo,
+  type ModuleGraph,
+} from './resolver.js';
