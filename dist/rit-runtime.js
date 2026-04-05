@@ -4029,14 +4029,15 @@ var querySchema = {
     name: { type: "string", required: true },
     url: { type: "string", required: true },
     method: { type: "string" },
-    headers: { type: "string" },
-    // JSON
     params: { type: "string" },
     // JSON: [{name, type, required}]
     staleTime: { type: "number" },
     cacheTime: { type: "number" },
     refetchInterval: { type: "number" },
     transform: { type: "string" }
+    // Headers use header.* fields (header.Authorization, header.Accept, etc.).
+    // Each value is an expression evaluated at fetch time. Browser globals
+    // (localStorage, etc.) are accessible. Store reads (get, hget) are in scope.
   }
 };
 var configSchema = {
@@ -5135,17 +5136,16 @@ var QueryEngine = class {
     const url = this.store.hget(key, "url");
     if (!url) return null;
     const method = this.store.hget(key, "method") || DEFAULT_METHOD;
-    const headersRaw = this.store.hget(key, "headers");
     const paramsRaw = this.store.hget(key, "params");
     const staleTimeRaw = this.store.hget(key, "staleTime");
     const cacheTimeRaw = this.store.hget(key, "cacheTime");
     const refetchIntervalRaw = this.store.hget(key, "refetchInterval");
     const transform = this.store.hget(key, "transform");
-    let headers = {};
-    if (headersRaw) {
-      try {
-        headers = JSON.parse(headersRaw);
-      } catch {
+    const allFields = this.store.hgetall(key);
+    const headerExprs = {};
+    for (const [field, value] of Object.entries(allFields)) {
+      if (field.startsWith("header.")) {
+        headerExprs[field.slice(7)] = value;
       }
     }
     let paramDefs = [];
@@ -5159,7 +5159,7 @@ var QueryEngine = class {
       name,
       url,
       method: method.toUpperCase(),
-      headers,
+      headerExprs,
       params: paramDefs,
       staleTime: staleTimeRaw ? Number(staleTimeRaw) : DEFAULT_STALE_TIME,
       cacheTime: cacheTimeRaw ? Number(cacheTimeRaw) : DEFAULT_CACHE_TIME,
@@ -5179,8 +5179,18 @@ var QueryEngine = class {
       try {
         const url = interpolateUrl(config.url, params);
         const init = { method: config.method };
-        if (Object.keys(config.headers).length > 0) {
-          init.headers = config.headers;
+        if (Object.keys(config.headerExprs).length > 0) {
+          const headers = {};
+          for (const [headerName, expr] of Object.entries(config.headerExprs)) {
+            try {
+              const value = this.evalHeaderExpr(expr);
+              if (value != null) headers[headerName] = String(value);
+            } catch {
+            }
+          }
+          if (Object.keys(headers).length > 0) {
+            init.headers = headers;
+          }
         }
         const res = await fetch(url, init);
         if (!res.ok) {
@@ -5213,6 +5223,21 @@ var QueryEngine = class {
     })();
     this.inflight.set(fetchKey, promise);
     promise.finally(() => this.inflight.delete(fetchKey));
+  }
+  // ── Header expression evaluation ───────────────────────
+  evalHeaderExpr(expr) {
+    const store = this.store;
+    const fn = new Function(
+      "get",
+      "hget",
+      "hgetall",
+      `return (${expr});`
+    );
+    return fn(
+      (key) => store.get(key),
+      (key, field) => store.hget(key, field),
+      (key) => store.hgetall(key)
+    );
   }
   // ── Transform evaluation ───────────────────────────────
   evalTransform(transform, data, params) {

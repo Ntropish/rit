@@ -16,6 +16,10 @@
  *   - Inactive: past cacheTime. Entry removed by GC.
  *   - Periodic: refetchInterval triggers refetch regardless of staleness.
  *
+ * Headers use the header.X field pattern (like attr.X and expr.X on nodes).
+ * Each header.X field on a query entity is an expression evaluated at fetch
+ * time. Example: header.Authorization = "Bearer " + localStorage.getItem("oidc:access_token")
+ *
  * Runtime layer keys:
  *   query:<name>:state:<paramKey>  hash { status, lastFetchedAt, error }
  *   query:<name>:data:<paramKey>   string (JSON-encoded response/transformed data)
@@ -29,7 +33,7 @@ export interface QueryConfig {
   name: string;
   url: string;
   method: string;
-  headers: Record<string, string>;
+  headerExprs: Record<string, string>;
   params: Array<{ name: string; type?: string; required?: boolean }>;
   staleTime: number;
   cacheTime: number;
@@ -169,16 +173,19 @@ export class QueryEngine {
     if (!url) return null;
 
     const method = this.store.hget(key, 'method') || DEFAULT_METHOD;
-    const headersRaw = this.store.hget(key, 'headers');
     const paramsRaw = this.store.hget(key, 'params');
     const staleTimeRaw = this.store.hget(key, 'staleTime');
     const cacheTimeRaw = this.store.hget(key, 'cacheTime');
     const refetchIntervalRaw = this.store.hget(key, 'refetchInterval');
     const transform = this.store.hget(key, 'transform');
 
-    let headers: Record<string, string> = {};
-    if (headersRaw) {
-      try { headers = JSON.parse(headersRaw); } catch { /* invalid JSON */ }
+    // Collect header.* expression fields
+    const allFields = this.store.hgetall(key);
+    const headerExprs: Record<string, string> = {};
+    for (const [field, value] of Object.entries(allFields)) {
+      if (field.startsWith('header.')) {
+        headerExprs[field.slice(7)] = value;
+      }
     }
 
     let paramDefs: QueryConfig['params'] = [];
@@ -190,7 +197,7 @@ export class QueryEngine {
       name,
       url,
       method: method.toUpperCase(),
-      headers,
+      headerExprs,
       params: paramDefs,
       staleTime: staleTimeRaw ? Number(staleTimeRaw) : DEFAULT_STALE_TIME,
       cacheTime: cacheTimeRaw ? Number(cacheTimeRaw) : DEFAULT_CACHE_TIME,
@@ -220,8 +227,19 @@ export class QueryEngine {
       try {
         const url = interpolateUrl(config.url, params);
         const init: RequestInit = { method: config.method };
-        if (Object.keys(config.headers).length > 0) {
-          init.headers = config.headers;
+
+        // Evaluate header.* expressions at fetch time
+        if (Object.keys(config.headerExprs).length > 0) {
+          const headers: Record<string, string> = {};
+          for (const [headerName, expr] of Object.entries(config.headerExprs)) {
+            try {
+              const value = this.evalHeaderExpr(expr);
+              if (value != null) headers[headerName] = String(value);
+            } catch { /* skip header on eval failure */ }
+          }
+          if (Object.keys(headers).length > 0) {
+            init.headers = headers;
+          }
         }
 
         const res = await fetch(url, init);
@@ -261,6 +279,21 @@ export class QueryEngine {
 
     this.inflight.set(fetchKey, promise);
     promise.finally(() => this.inflight.delete(fetchKey));
+  }
+
+  // ── Header expression evaluation ───────────────────────
+
+  private evalHeaderExpr(expr: string): unknown {
+    const store = this.store;
+    const fn = new Function(
+      'get', 'hget', 'hgetall',
+      `return (${expr});`,
+    );
+    return fn(
+      (key: string) => store.get(key),
+      (key: string, field: string) => store.hget(key, field),
+      (key: string) => store.hgetall(key),
+    );
   }
 
   // ── Transform evaluation ───────────────────────────────

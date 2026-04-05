@@ -72,12 +72,14 @@ export const querySchema: EntitySchema = {
     name:            { type: 'string', required: true },
     url:             { type: 'string', required: true },
     method:          { type: 'string' },
-    headers:         { type: 'string' }, // JSON
     params:          { type: 'string' }, // JSON: [{name, type, required}]
     staleTime:       { type: 'number' },
     cacheTime:       { type: 'number' },
     refetchInterval: { type: 'number' },
     transform:       { type: 'string' },
+    // Headers use header.* fields (header.Authorization, header.Accept, etc.).
+    // Each value is an expression evaluated at fetch time. Browser globals
+    // (localStorage, etc.) are accessible. Store reads (get, hget) are in scope.
   },
 };
 
