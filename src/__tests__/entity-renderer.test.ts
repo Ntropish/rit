@@ -540,4 +540,45 @@ describe('Entity-tree renderer', () => {
       dispose();
     });
   });
+
+  describe('headless components', () => {
+    it('resolves a component with no root and no template', async () => {
+      const store = new ReactiveStore();
+      // Headless component: has name but no root or template
+      await store.hmset('component:use-counter', { name: 'use-counter' });
+
+      const { resolveComponent } = await import('../framework/resolver.js');
+      const comp = resolveComponent(store, 'use-counter');
+
+      expect(comp).not.toBeNull();
+      expect(comp!.headless).toBe(true);
+      expect(comp!.root).toBeNull();
+      expect(comp!.template).toBeNull();
+    });
+
+    it('produces no DOM output when rendered', async () => {
+      const store = new ReactiveStore();
+      await store.hmset('component:use-counter', { name: 'use-counter' });
+
+      const container = document.createElement('div');
+      const dispose = renderEntityComponent(store, 'use-counter', container);
+
+      // Headless component should not add any content
+      expect(container.childNodes.length).toBe(0);
+      expect(container.textContent).toBe('');
+      dispose();
+    });
+
+    it('returns a dispose function', async () => {
+      const store = new ReactiveStore();
+      await store.hmset('component:use-timer', { name: 'use-timer' });
+
+      const container = document.createElement('div');
+      const dispose = renderEntityComponent(store, 'use-timer', container);
+
+      expect(typeof dispose).toBe('function');
+      // Should not throw
+      dispose();
+    });
+  });
 });

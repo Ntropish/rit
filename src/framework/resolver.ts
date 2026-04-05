@@ -18,10 +18,12 @@ export interface PropDef {
 
 export interface ResolvedComponent {
   name: string;
-  /** String template (legacy). Null for entity-based components. */
+  /** String template (legacy). Null for entity-based or headless components. */
   template: string | null;
-  /** Root node ID for entity-based templates. Null for string-template components. */
+  /** Root node ID for entity-based templates. Null for string-template or headless components. */
   root: string | null;
+  /** True when the component has neither template nor root (behavioral component). */
+  headless: boolean;
   style: string | null;
   props: PropDef[];
 }
@@ -48,10 +50,6 @@ export function resolveComponent(
 
   const template = store.hget(key, 'template');
   const root = store.hget(key, 'root');
-
-  // Must have either a string template or a root node ID
-  if (template === null && root === null) return null;
-
   const style = store.hget(key, 'style');
   const propsRaw = store.hget(key, 'props');
 
@@ -59,6 +57,7 @@ export function resolveComponent(
     name: entityName,
     template,
     root,
+    headless: template === null && root === null,
     style,
     props: parseProps(propsRaw),
   };

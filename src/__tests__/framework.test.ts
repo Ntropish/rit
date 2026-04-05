@@ -237,11 +237,15 @@ describe('Component resolver', () => {
       expect(comp!.style).toBe('.app { padding: 1rem; }');
     });
 
-    it('returns null when component has neither template nor root', async () => {
+    it('resolves headless component with neither template nor root', async () => {
       const store = new ReactiveStore();
       await store.hmset('component:empty', { name: 'empty' });
 
-      expect(resolveComponent(store, 'empty')).toBeNull();
+      const comp = resolveComponent(store, 'empty');
+      expect(comp).not.toBeNull();
+      expect(comp!.headless).toBe(true);
+      expect(comp!.root).toBeNull();
+      expect(comp!.template).toBeNull();
     });
 
     it('returns null for nonexistent component', () => {

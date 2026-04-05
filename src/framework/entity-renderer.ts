@@ -41,7 +41,17 @@ export function renderEntityComponent(
 ): () => void {
   const document = doc ?? container.ownerDocument;
   const comp = resolveComponent(store, componentName);
-  if (!comp || comp.root === null) {
+  if (!comp) {
+    container.textContent = `[unknown entity component: ${componentName}]`;
+    return () => {};
+  }
+
+  // Headless components have lifecycle but no DOM output
+  if (comp.headless) {
+    return () => {};
+  }
+
+  if (comp.root === null) {
     container.textContent = `[unknown entity component: ${componentName}]`;
     return () => {};
   }
