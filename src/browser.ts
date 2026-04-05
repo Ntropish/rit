@@ -62,3 +62,8 @@ export {
   Router, createRouter, loadRoutes,
   type RouteEntity, type RouteMatch,
 } from './framework/router.js';
+
+export {
+  QueryEngine,
+  type QueryConfig, type QueryState,
+} from './framework/query-engine.js';

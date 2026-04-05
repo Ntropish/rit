@@ -55,3 +55,9 @@ export {
   type RouteEntity,
   type RouteMatch,
 } from './router.js';
+
+export {
+  QueryEngine,
+  type QueryConfig,
+  type QueryState,
+} from './query-engine.js';

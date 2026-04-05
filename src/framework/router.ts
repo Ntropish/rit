@@ -113,15 +113,17 @@ export class Router {
   private store: ReactiveStore;
   private container: Element;
   private document: Document;
+  private extraScope: Record<string, unknown>;
   private routes: Array<{ entity: RouteEntity; segments: Segment[]; fullPath: string }> = [];
   private routeMap = new Map<string, RouteEntity>();
   private currentDispose: (() => void) | null = null;
   private listeners: Array<() => void> = [];
 
-  constructor(store: ReactiveStore, container: Element, doc?: Document) {
+  constructor(store: ReactiveStore, container: Element, doc?: Document, extraScope?: Record<string, unknown>) {
     this.store = store;
     this.container = container;
     this.document = doc ?? container.ownerDocument;
+    this.extraScope = extraScope ?? {};
   }
 
   async start(): Promise<void> {
@@ -259,6 +261,7 @@ export class Router {
       document: this.document,
       components,
       extraScope: {
+        ...this.extraScope,
         navigate: (path: string) => self.navigate(path),
       },
     };
@@ -329,8 +332,9 @@ export async function createRouter(
   store: ReactiveStore,
   container: Element,
   doc?: Document,
+  extraScope?: Record<string, unknown>,
 ): Promise<Router> {
-  const router = new Router(store, container, doc);
+  const router = new Router(store, container, doc, extraScope);
   await router.start();
   return router;
 }
