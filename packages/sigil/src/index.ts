@@ -11,3 +11,7 @@ export {
   type AstEntityWrite,
   type ProjectionResult,
 } from './projector.js';
+
+export {
+  materialize,
+} from './materializer.js';
