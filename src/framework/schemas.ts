@@ -54,6 +54,22 @@ export function nodeKey(componentName: string, nodeId: string): string {
   return `component:${componentName}.node:${nodeId}`;
 }
 
+/**
+ * Build a bind entity key.
+ * Binds are namespaced under their owning component:
+ *   component:<componentName>.bind:<bindName>
+ */
+export function bindKey(componentName: string, bindName: string): string {
+  return `component:${componentName}.bind:${bindName}`;
+}
+
+/**
+ * Glob pattern for all binds under a component.
+ */
+export function bindPattern(componentName: string): string {
+  return `component:${componentName}.bind:*`;
+}
+
 export const routeSchema: EntitySchema = {
   prefix: 'route',
   identity: ['name'],

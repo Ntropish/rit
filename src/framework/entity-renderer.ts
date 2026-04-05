@@ -15,7 +15,7 @@
 import { effect } from '../reactive/signals.js';
 import type { ReactiveStore } from '../reactive/store.js';
 import { resolveComponent } from './resolver.js';
-import { nodeKey } from './schemas.js';
+import { nodeKey, bindPattern } from './schemas.js';
 import { parseTemplate } from './parser.js';
 import { renderNodes } from './renderer.js';
 import {
@@ -57,7 +57,36 @@ export function renderEntityComponent(
   }
 
   const components = collectComponentNames(store);
-  const ctx: RenderContext = { store, props, document, components };
+
+  // Discover and mount bind sub-entities, collecting exposed values into extraScope
+  const bindDisposers: Array<() => void> = [];
+  const extraScope: Record<string, unknown> = {};
+  const bindKeys = store.keys(bindPattern(componentName));
+  for (const bk of bindKeys) {
+    const bindName = bk.split('.bind:')[1];
+    if (!bindName) continue;
+
+    const refComponent = store.hget(bk, 'component');
+    if (!refComponent) continue;
+
+    const bindComp = resolveComponent(store, refComponent);
+    if (!bindComp) continue;
+
+    // Collect prop.* fields from the bind entity
+    const bindFields = store.hgetall(bk);
+    const bindProps: Record<string, string> = {};
+    for (const [field, value] of Object.entries(bindFields)) {
+      if (field.startsWith('prop.')) {
+        bindProps[field.slice(5)] = value;
+      }
+    }
+
+    // Mount the headless component (lifecycle only for now)
+    // TODO: reactive primitive sub-entities and expose declaration
+    bindDisposers.push(() => {});
+  }
+
+  const ctx: RenderContext = { store, props, document, components, extraScope };
   const result = renderEntityNode(componentName, comp.root, ctx);
 
   // Apply scoped style
@@ -75,7 +104,10 @@ export function renderEntityComponent(
     container.appendChild(node);
   }
 
-  return result.dispose;
+  return () => {
+    result.dispose();
+    for (const d of bindDisposers) d();
+  };
 }
 
 // ── Node rendering ───────────────────────────────────────

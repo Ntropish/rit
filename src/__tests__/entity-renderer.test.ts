@@ -541,6 +541,82 @@ describe('Entity-tree renderer', () => {
     });
   });
 
+  describe('bind sub-entities', () => {
+    it('discovers bind sub-entities on a component', async () => {
+      const store = new ReactiveStore();
+
+      // Parent component
+      await setComponent(store, 'app', 'root');
+      await setNode(store, 'app', 'root', {
+        type: 'element',
+        tag: 'div',
+        children: 'msg',
+      });
+      await setNode(store, 'app', 'msg', { type: 'text', value: 'hello' });
+
+      // Headless component
+      await store.hmset('component:use-counter', { name: 'use-counter' });
+
+      // Bind sub-entity
+      await store.hmset('component:app.bind:counter', {
+        component: 'use-counter',
+        'prop.initial': '0',
+      });
+
+      const container = document.createElement('div');
+      const dispose = renderEntityComponent(store, 'app', container);
+
+      // Should still render the visual part
+      expect(container.querySelector('div')?.textContent).toBe('hello');
+      dispose();
+    });
+
+    it('disposes bind sub-entities when parent disposes', async () => {
+      const store = new ReactiveStore();
+
+      await setComponent(store, 'app', 'root');
+      await setNode(store, 'app', 'root', {
+        type: 'element',
+        tag: 'div',
+      });
+
+      await store.hmset('component:use-timer', { name: 'use-timer' });
+      await store.hmset('component:app.bind:timer', {
+        component: 'use-timer',
+      });
+
+      const container = document.createElement('div');
+      const dispose = renderEntityComponent(store, 'app', container);
+
+      // Should not throw on dispose
+      expect(() => dispose()).not.toThrow();
+    });
+
+    it('ignores bind referencing unknown component', async () => {
+      const store = new ReactiveStore();
+
+      await setComponent(store, 'app', 'root');
+      await setNode(store, 'app', 'root', {
+        type: 'element',
+        tag: 'div',
+        children: 'msg',
+      });
+      await setNode(store, 'app', 'msg', { type: 'text', value: 'works' });
+
+      // Bind references a component that doesn't exist
+      await store.hmset('component:app.bind:missing', {
+        component: 'nonexistent',
+      });
+
+      const container = document.createElement('div');
+      const dispose = renderEntityComponent(store, 'app', container);
+
+      // Should still render without errors
+      expect(container.querySelector('div')?.textContent).toBe('works');
+      dispose();
+    });
+  });
+
   describe('headless components', () => {
     it('resolves a component with no root and no template', async () => {
       const store = new ReactiveStore();
