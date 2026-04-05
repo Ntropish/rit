@@ -592,6 +592,84 @@ describe('Entity-tree renderer', () => {
       expect(() => dispose()).not.toThrow();
     });
 
+    it('mounts headless component with signal sub-entity', async () => {
+      const store = new ReactiveStore();
+
+      // Headless component with a signal
+      await store.hmset('component:use-counter', { name: 'use-counter' });
+      await store.hmset('component:use-counter.signal:count', { value: '0' });
+
+      // Parent component using the bind
+      await setComponent(store, 'app', 'root');
+      await setNode(store, 'app', 'root', {
+        type: 'expression',
+        expr: 'counter.count.value',
+      });
+      await store.hmset('component:app.bind:counter', {
+        component: 'use-counter',
+      });
+
+      const container = document.createElement('div');
+      const dispose = renderEntityComponent(store, 'app', container);
+
+      expect(container.textContent).toBe('0');
+      dispose();
+    });
+
+    it('mounts headless component with computed sub-entity', async () => {
+      const store = new ReactiveStore();
+
+      // Headless component with signal + computed
+      await store.hmset('component:use-doubler', { name: 'use-doubler' });
+      await store.hmset('component:use-doubler.signal:value', { value: '5' });
+      await store.hmset('component:use-doubler.computed:doubled', {
+        expr: 'value.value * 2',
+      });
+
+      // Parent component
+      await setComponent(store, 'app', 'root');
+      await setNode(store, 'app', 'root', {
+        type: 'expression',
+        expr: 'doubler.doubled.value',
+      });
+      await store.hmset('component:app.bind:doubler', {
+        component: 'use-doubler',
+      });
+
+      const container = document.createElement('div');
+      const dispose = renderEntityComponent(store, 'app', container);
+
+      expect(container.textContent).toBe('10');
+      dispose();
+    });
+
+    it('passes props from bind to headless component', async () => {
+      const store = new ReactiveStore();
+
+      // Headless component that uses props
+      await store.hmset('component:use-greeter', { name: 'use-greeter' });
+      await store.hmset('component:use-greeter.signal:greeting', {
+        value: '"Hello, " + props.name',
+      });
+
+      // Parent component
+      await setComponent(store, 'app', 'root');
+      await setNode(store, 'app', 'root', {
+        type: 'expression',
+        expr: 'greeter.greeting.value',
+      });
+      await store.hmset('component:app.bind:greeter', {
+        component: 'use-greeter',
+        'prop.name': 'World',
+      });
+
+      const container = document.createElement('div');
+      const dispose = renderEntityComponent(store, 'app', container);
+
+      expect(container.textContent).toBe('Hello, World');
+      dispose();
+    });
+
     it('ignores bind referencing unknown component', async () => {
       const store = new ReactiveStore();
 

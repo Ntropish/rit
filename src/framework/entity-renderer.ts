@@ -12,7 +12,7 @@
  * Node types: element, text, expression, for, component-ref.
  */
 
-import { effect } from '../reactive/signals.js';
+import { signal, computed, effect } from '../reactive/signals.js';
 import type { ReactiveStore } from '../reactive/store.js';
 import { resolveComponent } from './resolver.js';
 import { nodeKey, bindPattern } from './schemas.js';
@@ -81,9 +81,13 @@ export function renderEntityComponent(
       }
     }
 
-    // Mount the headless component (lifecycle only for now)
-    // TODO: reactive primitive sub-entities and expose declaration
-    bindDisposers.push(() => {});
+    // Mount the headless component's reactive primitives
+    const bindCtx: RenderContext = { store, props, document, components };
+    const mounted = mountHeadlessComponent(store, refComponent, bindProps, bindCtx);
+
+    // Expose the headless component's scope under the bind name
+    extraScope[bindName] = mounted.scope;
+    bindDisposers.push(mounted.dispose);
   }
 
   const ctx: RenderContext = { store, props, document, components, extraScope };
@@ -295,6 +299,92 @@ function renderFor(
     nodes: [container],
     dispose: () => {
       for (const d of childDisposers) d();
+      for (const d of disposers) d();
+    },
+  };
+}
+
+// ── Headless component mounting ──────────────────────────
+
+interface HeadlessMountResult {
+  /** Reactive values created by the headless component, keyed by name. */
+  scope: Record<string, unknown>;
+  /** Dispose all reactive primitives. */
+  dispose: () => void;
+}
+
+/**
+ * Mount a headless component's reactive primitive sub-entities.
+ *
+ * Discovers signal:*, computed:*, and effect:* sub-entities under the
+ * component, creates the corresponding reactive primitives, and returns
+ * them as a scope object.
+ *
+ * Processing order: signals first (base state), then computeds (derived),
+ * then effects (side effects). Each has access to all previously created
+ * primitives via the internal scope.
+ */
+function mountHeadlessComponent(
+  store: ReactiveStore,
+  componentName: string,
+  props: Record<string, string>,
+  ctx: RenderContext,
+): HeadlessMountResult {
+  const scope: Record<string, unknown> = {};
+  const disposers: Array<() => void> = [];
+
+  // Build the expression context for evaluating sub-entity expressions.
+  // This includes store functions, props, and the growing scope of
+  // reactive primitives created by this headless component.
+  const headlessCtx: RenderContext = {
+    ...ctx,
+    props,
+    extraScope: scope,
+  };
+
+  // 1. Signals: create reactive state
+  const signalKeys = store.keys(`component:${componentName}.signal:*`);
+  for (const sk of signalKeys) {
+    const signalName = sk.split('.signal:')[1];
+    if (!signalName) continue;
+
+    const valueExpr = store.hget(sk, 'value');
+    const initialValue = valueExpr != null ? evaluateExpression(valueExpr, headlessCtx) : null;
+    const sig = signal(initialValue);
+    scope[signalName] = sig;
+  }
+
+  // 2. Computeds: derived reactive values
+  const computedKeys = store.keys(`component:${componentName}.computed:*`);
+  for (const ck of computedKeys) {
+    const computedName = ck.split('.computed:')[1];
+    if (!computedName) continue;
+
+    const expr = store.hget(ck, 'expr');
+    if (!expr) continue;
+
+    const comp = computed(() => evaluateExpression(expr, headlessCtx));
+    scope[computedName] = comp;
+  }
+
+  // 3. Effects: side effects
+  const effectKeys = store.keys(`component:${componentName}.effect:*`);
+  for (const ek of effectKeys) {
+    const effectName = ek.split('.effect:')[1];
+    if (!effectName) continue;
+
+    const expr = store.hget(ek, 'expr');
+    if (!expr) continue;
+
+    const dispose = effect(() => {
+      evaluateExpression(expr, headlessCtx);
+    });
+    disposers.push(dispose);
+  }
+
+  return {
+    scope,
+    dispose: () => {
       for (const d of disposers) d();
     },
   };
