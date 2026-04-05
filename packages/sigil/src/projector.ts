@@ -1385,8 +1385,13 @@ function projectFunctionDeclaration(node: Node, ctx: ProjectionContext): Project
 
   const name = node.getName() ?? '';
   const isAsync = node.isAsync();
-  const exported = node.isExported();
-  const isDefault = node.isDefaultExport();
+  // Check the function's own modifiers for export/default keywords,
+  // not ts-morph's isExported() which also considers separate export statements
+  const modifiers = node.getModifiers() ?? [];
+  const hasExportKeyword = modifiers.some(m => m.getKind() === SyntaxKind.ExportKeyword);
+  const hasDefaultKeyword = modifiers.some(m => m.getKind() === SyntaxKind.DefaultKeyword);
+  const exported = hasExportKeyword;
+  const isDefault = hasExportKeyword && hasDefaultKeyword;
 
   const paramIds: string[] = [];
   for (const param of node.getParameters()) {

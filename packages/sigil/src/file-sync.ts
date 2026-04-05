@@ -56,11 +56,13 @@ export function materializeToDir(writes: AstEntityWrite[], outDir: string): Sync
     const source = materialize(moduleWrites);
     if (!source.trim()) continue;
 
-    // Determine file path
+    // Determine file path; add .ts only if no extension present
     let filePath = modulePath;
     if (!extname(filePath)) {
       filePath += '.ts';
     }
+    // Normalize separators
+    filePath = filePath.replace(/\\/g, '/');
 
     const fullPath = join(outDir, filePath);
     const dir = dirname(fullPath);
@@ -93,8 +95,8 @@ export function projectFromDir(srcDir: string, extensions = ['.ts', '.tsx', '.js
 
   for (const file of files) {
     const source = readFileSync(join(srcDir, file), 'utf-8');
-    const modulePath = file.replace(/\.[^.]+$/, ''); // strip extension
-    const writes = projectSource(source, modulePath);
+    // Keep the full filename as module path to preserve extension info
+    const writes = projectSource(source, file);
     allWrites.push(...writes);
   }
 

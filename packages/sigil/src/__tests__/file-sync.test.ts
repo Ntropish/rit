@@ -54,7 +54,7 @@ describe('Sigil file sync', () => {
       writeFileSync(join(tmpDir, 'main.ts'), 'const x = 42;', 'utf-8');
       const writes = projectFromDir(tmpDir);
 
-      const module = writes.find(w => w.key === 'module:main');
+      const module = writes.find(w => w.key === 'module:main.ts');
       expect(module).toBeDefined();
 
       const astNodes = writes.filter(w => w.key.startsWith('ast:'));
@@ -67,7 +67,7 @@ describe('Sigil file sync', () => {
 
       const writes = projectFromDir(tmpDir);
 
-      const module = writes.find(w => w.key === 'module:src/utils');
+      const module = writes.find(w => w.key === 'module:src/utils.ts');
       expect(module).toBeDefined();
     });
 
@@ -89,7 +89,7 @@ describe('Sigil file sync', () => {
       const writes = projectFromDir(tmpDir);
       const modules = writes.filter(w => w.key.startsWith('module:'));
       expect(modules.length).toBe(1);
-      expect(modules[0].fields.path).toBe('main');
+      expect(modules[0].fields.path).toBe('main.ts');
     });
   });
 
@@ -149,7 +149,7 @@ describe('Sigil file sync', () => {
 
       // Both should have the same module
       const origModule = originalWrites.find(w => w.key === 'module:main');
-      const rtModule = roundTripWrites.find(w => w.key === 'module:main');
+      const rtModule = roundTripWrites.find(w => w.key === 'module:main.ts');
       expect(origModule).toBeDefined();
       expect(rtModule).toBeDefined();
 
