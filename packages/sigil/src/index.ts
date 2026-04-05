@@ -33,6 +33,13 @@ export {
 } from './file-sync.js';
 
 export {
+  writeToStore,
+  readFromStore,
+  clearStore,
+  type DataModelLike,
+} from './store-adapter.js';
+
+export {
   buildModuleGraph,
   topologicalOrder,
   resolveSpecifier,
