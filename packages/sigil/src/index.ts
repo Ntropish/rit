@@ -17,6 +17,14 @@ export {
 } from './materializer.js';
 
 export {
+  compile,
+  compileModule,
+  type CompiledModule,
+  type CompileResult,
+  type CompileOptions,
+} from './compiler.js';
+
+export {
   buildModuleGraph,
   topologicalOrder,
   resolveSpecifier,
