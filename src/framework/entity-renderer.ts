@@ -383,29 +383,47 @@ function mountHeadlessComponent(
   }
 
   // Filter scope by expose declaration
-  const exposeRaw = store.hget(`component:${componentName}`, 'expose');
+  // expose field: comma-separated names exposed as-is
+  // expose.* fields: rename (expose.result: doubled -> expose 'doubled' as 'result')
+  const compKey = `component:${componentName}`;
+  const compFields = store.hgetall(compKey);
+  const exposeRaw = compFields.expose;
+
+  const filteredScope: Record<string, unknown> = {};
+  let hasExpose = false;
+
+  // expose.* fields (renamed exports)
+  for (const [field, value] of Object.entries(compFields)) {
+    if (field.startsWith('expose.')) {
+      hasExpose = true;
+      const externalName = field.slice(7); // after 'expose.'
+      const internalName = value;
+      if (internalName in scope) {
+        filteredScope[externalName] = scope[internalName];
+      }
+    }
+  }
+
+  // expose field (same-name exports)
   if (exposeRaw) {
+    hasExpose = true;
     const exposed = exposeRaw.split(',').map(s => s.trim()).filter(Boolean);
-    const filteredScope: Record<string, unknown> = {};
     for (const name of exposed) {
       if (name in scope) {
         filteredScope[name] = scope[name];
       }
     }
-    return {
-      scope: filteredScope,
-      dispose: () => {
-        for (const d of disposers) d();
-      },
-    };
   }
 
-  return {
-    scope,
-    dispose: () => {
-      for (const d of disposers) d();
-    },
+  const disposeAll = () => {
+    for (const d of disposers) d();
   };
+
+  if (hasExpose) {
+    return { scope: filteredScope, dispose: disposeAll };
+  }
+
+  return { scope, dispose: disposeAll };
 }
 
 // ── Component ref ────────────────────────────────────────

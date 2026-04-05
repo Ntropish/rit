@@ -731,6 +731,36 @@ describe('Entity-tree renderer', () => {
       dispose();
     });
 
+    it('exposes values with alternate names via expose.* fields', async () => {
+      const store = new ReactiveStore();
+
+      // Headless component: expose 'doubled' as 'result'
+      await store.hmset('component:use-doubler', {
+        name: 'use-doubler',
+        'expose.result': 'doubled',
+      });
+      await store.hmset('component:use-doubler.signal:count', { value: '5' });
+      await store.hmset('component:use-doubler.computed:doubled', {
+        expr: 'count.value * 2',
+      });
+
+      // Parent reads renamed value
+      await setComponent(store, 'app', 'root');
+      await setNode(store, 'app', 'root', {
+        type: 'expression',
+        expr: 'doubler.result.value',
+      });
+      await store.hmset('component:app.bind:doubler', {
+        component: 'use-doubler',
+      });
+
+      const container = document.createElement('div');
+      const dispose = renderEntityComponent(store, 'app', container);
+
+      expect(container.textContent).toBe('10');
+      dispose();
+    });
+
     it('exposes everything when no expose declaration', async () => {
       const store = new ReactiveStore();
 
