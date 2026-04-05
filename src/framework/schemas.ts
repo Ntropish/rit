@@ -24,7 +24,7 @@ export const nodeSchema: EntitySchema = {
   identity: ['nodeId'],
   fields: {
     nodeId:     { type: 'string', required: true },
-    type:       { type: 'enum', required: true, values: 'element,text,expression,for,let,component-ref' },
+    type:       { type: 'enum', required: true, values: 'element,text,expression,for,component-ref' },
     // Element fields
     tag:        { type: 'string' },
     children:   { type: 'string', label: 'Comma-separated child node IDs' },
