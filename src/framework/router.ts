@@ -15,8 +15,10 @@
 
 import type { ReactiveStore } from '../reactive/store.js';
 import { renderNodes, type RenderContext, type RenderResult } from './renderer.js';
+import { renderEntityNode } from './entity-renderer.js';
 import { resolveComponent } from './resolver.js';
 import { parseTemplate } from './parser.js';
+import { collectComponentNames } from './render-shared.js';
 
 // ── Types ────────────────────────────────────────────────
 
@@ -248,11 +250,7 @@ export class Router {
       childResult = this.renderLevel(chain, level + 1);
     }
 
-    const ast = parseTemplate(comp.template);
-    const components = new Set<string>();
-    for (const key of this.store.keys('component:*')) {
-      components.add(key.slice('component:'.length));
-    }
+    const components = collectComponentNames(this.store);
 
     const self = this;
     const ctx: RenderContext = {
@@ -265,7 +263,15 @@ export class Router {
       },
     };
 
-    const result = renderNodes(ast, ctx);
+    let result: RenderResult;
+    if (comp.root !== null) {
+      // Entity-based component: render from node entities
+      result = renderEntityNode(componentName, comp.root, ctx);
+    } else {
+      // String-template component: parse and render AST
+      const ast = parseTemplate(comp.template!);
+      result = renderNodes(ast, ctx);
+    }
     const disposers = [result.dispose];
 
     // Replace <rit-outlet> elements with child content

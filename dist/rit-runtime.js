@@ -23206,11 +23206,7 @@ class Router {
     if (level + 1 < chain.length) {
       childResult = this.renderLevel(chain, level + 1);
     }
-    const ast = parseTemplate(comp.template);
-    const components = new Set;
-    for (const key of this.store.keys("component:*")) {
-      components.add(key.slice("component:".length));
-    }
+    const components = collectComponentNames(this.store);
     const self2 = this;
     const ctx = {
       store: this.store,
@@ -23221,7 +23217,13 @@ class Router {
         navigate: (path) => self2.navigate(path)
       }
     };
-    const result = renderNodes(ast, ctx);
+    let result;
+    if (comp.root !== null) {
+      result = renderEntityNode(componentName, comp.root, ctx);
+    } else {
+      const ast = parseTemplate(comp.template);
+      result = renderNodes(ast, ctx);
+    }
     const disposers = [result.dispose];
     if (childResult) {
       const replaceOutlets = (parent) => {
@@ -23333,4 +23335,4 @@ export {
   CachedStore
 };
 
-//# debugId=B56D8B2E6F0A8A6164756E2164756E21
+//# debugId=220DCE19E833181764756E2164756E21
