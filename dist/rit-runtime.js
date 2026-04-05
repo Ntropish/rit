@@ -22610,6 +22610,11 @@ function renderElement(componentName, nodeId, key, ctx) {
         const attrName = field.slice(5);
         el.setAttribute(attrName, value);
         currentAttrs.add(attrName);
+      } else if (field.startsWith("expr.")) {
+        const attrName = field.slice(5);
+        const result = evaluateExpression(value, ctx);
+        el.setAttribute(attrName, String(result ?? ""));
+        currentAttrs.add(attrName);
       }
     }
     for (const attr of prevAttrs) {
@@ -23335,4 +23340,4 @@ export {
   CachedStore
 };
 
-//# debugId=220DCE19E833181764756E2164756E21
+//# debugId=2A7CBDF709166D5664756E2164756E21

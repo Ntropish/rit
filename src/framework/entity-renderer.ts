@@ -116,7 +116,8 @@ function renderElement(
   const el = ctx.document.createElement(tag);
   const disposers: Array<() => void> = [];
 
-  // Reactive HTML attributes: re-reads all attr.* fields when any field changes.
+  // Reactive attributes: re-reads attr.* and expr.* fields when any field changes.
+  // attr.* = static string values, expr.* = expression values (evaluated reactively).
   let prevAttrs = new Set<string>();
   disposers.push(effect(() => {
     const allFields = ctx.store.hgetall(key);
@@ -125,6 +126,11 @@ function renderElement(
       if (field.startsWith('attr.')) {
         const attrName = field.slice(5);
         el.setAttribute(attrName, value);
+        currentAttrs.add(attrName);
+      } else if (field.startsWith('expr.')) {
+        const attrName = field.slice(5);
+        const result = evaluateExpression(value, ctx);
+        el.setAttribute(attrName, String(result ?? ''));
         currentAttrs.add(attrName);
       }
     }
