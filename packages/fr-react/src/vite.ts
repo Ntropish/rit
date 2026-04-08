@@ -6,7 +6,7 @@
  * Emits .d.ts declarations so TypeScript resolves types for entity-based components.
  */
 
-import { existsSync, statSync, writeFileSync, readFileSync, mkdirSync } from 'fs';
+import { existsSync, writeFileSync, readFileSync, mkdirSync, watch, type FSWatcher } from 'fs';
 import { join, dirname, resolve } from 'path';
 import type { Plugin, ViteDevServer } from 'vite';
 import { openSqliteStore } from '../../../src/store/sqlite.js';
@@ -52,7 +52,6 @@ export function frReact(options: FrReactViteOptions = {}): Plugin {
   let fileGroups: Map<string, ComponentEntity[]> = new Map();
   let allComponentNames: Set<string> = new Set();
   let componentFileMap: Map<string, string> = new Map();
-  let lastMtime = 0;
 
   async function loadEntities() {
     components = await readComponents(repo);
@@ -116,17 +115,13 @@ export function frReact(options: FrReactViteOptions = {}): Plugin {
       repo = await Repository.init(dbHandle.store, dbHandle.refStore);
       await loadEntities();
       writeFiles();
-      lastMtime = statSync(ritFile).mtimeMs;
     },
 
     configureServer(server: ViteDevServer) {
-      // Watch the .rit file for changes and regenerate files + trigger HMR
-      const checkInterval = setInterval(async () => {
-        try {
-          const currentMtime = statSync(ritFile).mtimeMs;
-          if (currentMtime <= lastMtime) return;
-          lastMtime = currentMtime;
+      let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
+      async function handleRitChange() {
+        try {
           // Re-open the database to pick up WAL changes
           dbHandle.close();
           dbHandle = openSqliteStore(ritFile);
@@ -160,12 +155,27 @@ export function frReact(options: FrReactViteOptions = {}): Plugin {
             server.ws.send({ type: 'full-reload' });
           }
         } catch {
-          // .rit file might be mid-write
+          // .rit file might be mid-write; the next fs event will retry
         }
-      }, 500);
+      }
+
+      // Watch the .rit file and its directory for changes using OS file notifications.
+      // We watch the directory to catch WAL file creation/deletion events too.
+      const watchers: FSWatcher[] = [];
+      const ritDir = dirname(ritFile);
+      const ritBasename = ritFile.split(/[/\\]/).pop()!;
+
+      const dirWatcher = watch(ritDir, (eventType, filename) => {
+        // Only react to changes to the .rit file or its WAL/SHM
+        if (!filename) return;
+        if (!filename.startsWith(ritBasename)) return;
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(handleRitChange, 50);
+      });
+      watchers.push(dirWatcher);
 
       server.httpServer?.on('close', () => {
-        clearInterval(checkInterval);
+        for (const w of watchers) w.close();
         dbHandle.close();
       });
     },
