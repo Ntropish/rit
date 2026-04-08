@@ -11,7 +11,7 @@ import type { Plugin, ViteDevServer } from 'vite';
 import { openSqliteStore } from '../../../src/store/sqlite.js';
 import { Repository } from '../../../src/repo/index.js';
 import { readQueries, readMutations, generateQueriesCode } from './queries.js';
-import { updateDtsSection } from '../../fr-react/src/vite.js';
+import { updateDtsSection, registerSymbols } from '../../fr-react/src/vite.js';
 
 export interface FrQueryViteOptions {
   /** Path to the .rit file (default: auto-detect) */
@@ -86,6 +86,15 @@ export function frQuery(options: FrQueryViteOptions = {}): Plugin {
       if (!existsSync(ritFile)) {
         throw new Error(`fr-query: .rit file not found at ${ritFile}`);
       }
+
+      // Register query symbols for auto-import resolution in components
+      registerSymbols({
+        useQuery: { source: '@tanstack/react-query', isDefault: false },
+        useMutation: { source: '@tanstack/react-query', isDefault: false },
+        useQueryClient: { source: '@tanstack/react-query', isDefault: false },
+        QueryClient: { source: '@tanstack/react-query', isDefault: false },
+        QueryClientProvider: { source: '@tanstack/react-query', isDefault: false },
+      });
 
       dbHandle = openSqliteStore(ritFile);
       repo = await Repository.init(dbHandle.store, dbHandle.refStore);

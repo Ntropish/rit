@@ -74,6 +74,19 @@ function updateDtsSection(fullPath: string, sectionName: string, content: string
 
 export { updateDtsSection };
 
+/**
+ * Shared symbol registry for Vite plugins.
+ * All fr-* Vite plugins contribute their symbols here.
+ * The fr-react plugin reads them when generating component code.
+ */
+const sharedSymbols: SymbolRegistry = {};
+
+export function registerSymbols(symbols: SymbolRegistry): void {
+  Object.assign(sharedSymbols, symbols);
+  // Update the component materializer's active symbols
+  setSymbols(sharedSymbols);
+}
+
 export function frReact(options: FrReactViteOptions = {}): Plugin {
   let ritFile: string;
   let rootDir: string;
@@ -169,10 +182,14 @@ export function frReact(options: FrReactViteOptions = {}): Plugin {
         forwardRef: { source: 'react', isDefault: false },
         createContext: { source: 'react', isDefault: false },
       };
-      setSymbols({ ...defaultSymbols, ...options.symbols });
+      registerSymbols({ ...defaultSymbols, ...options.symbols });
 
       dbHandle = openSqliteStore(ritFile);
       repo = await Repository.init(dbHandle.store, dbHandle.refStore);
+    },
+
+    async buildStart() {
+      // Run after all plugins' configResolved, so all symbols are registered
       await loadEntities();
       emitDeclarationFile();
     },

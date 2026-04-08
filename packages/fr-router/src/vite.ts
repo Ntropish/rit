@@ -11,7 +11,7 @@ import type { Plugin, ViteDevServer } from 'vite';
 import { openSqliteStore } from '../../../src/store/sqlite.js';
 import { Repository } from '../../../src/repo/index.js';
 import { generateRouterFromRepo } from './router.js';
-import { updateDtsSection } from '../../fr-react/src/vite.js';
+import { updateDtsSection, registerSymbols } from '../../fr-react/src/vite.js';
 
 export interface FrRouterViteOptions {
   /** Path to the .rit file (default: auto-detect) */
@@ -69,6 +69,18 @@ export function frRouter(options: FrRouterViteOptions = {}): Plugin {
       if (!existsSync(ritFile)) {
         throw new Error(`fr-router: .rit file not found at ${ritFile}`);
       }
+
+      // Register router symbols for auto-import resolution in components
+      registerSymbols({
+        Link: { source: '@tanstack/react-router', isDefault: false },
+        Outlet: { source: '@tanstack/react-router', isDefault: false },
+        useNavigate: { source: '@tanstack/react-router', isDefault: false },
+        useParams: { source: '@tanstack/react-router', isDefault: false },
+        useSearch: { source: '@tanstack/react-router', isDefault: false },
+        useRouter: { source: '@tanstack/react-router', isDefault: false },
+        useMatch: { source: '@tanstack/react-router', isDefault: false },
+        useLoaderData: { source: '@tanstack/react-router', isDefault: false },
+      });
 
       dbHandle = openSqliteStore(ritFile);
       repo = await Repository.init(dbHandle.store, dbHandle.refStore);
