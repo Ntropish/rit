@@ -156,14 +156,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
       },
     },
-    {
-      name: "rit_routes",
-      description: "Show the route entity hierarchy as a tree.",
-      inputSchema: {
-        type: "object",
-        properties: {},
-      },
-    },
   ],
 }));
 
@@ -248,53 +240,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           count++;
         }
         return { content: [{ type: "text", text: entries.length > 0 ? entries.join('\n') : "(no commits)" }] };
-      }
-
-      case "rit_routes": {
-        // Collect all route entities
-        const routes: Array<{ key: string; path: string; parent: string; component: string; layout: boolean }> = [];
-        for await (const key of repo.keys('route:*')) {
-          const fields = await repo.hgetall(key);
-          routes.push({
-            key,
-            path: fields.path || '/',
-            parent: fields.parent || '',
-            component: fields.component || '',
-            layout: fields.layout === 'true',
-          });
-        }
-
-        if (routes.length === 0) {
-          return { content: [{ type: "text", text: "(no routes)" }] };
-        }
-
-        // Build tree
-        const root = routes.find(r => !r.parent);
-        if (!root) {
-          return { content: [{ type: "text", text: "(no root route)" }] };
-        }
-
-        const childrenOf = new Map<string, typeof routes>();
-        for (const r of routes) {
-          if (!r.parent) continue;
-          const siblings = childrenOf.get(r.parent) || [];
-          siblings.push(r);
-          childrenOf.set(r.parent, siblings);
-        }
-
-        function renderTree(route: typeof routes[0], indent: string, isLast: boolean): string {
-          const prefix = indent + (indent ? (isLast ? '└─ ' : '├─ ') : '');
-          const layoutTag = route.layout ? ' (layout)' : '';
-          const comp = route.component ? ` → ${route.component}` : '';
-          const line = `${prefix}${route.path}${layoutTag}${comp}`;
-          const children = childrenOf.get(route.key) || [];
-          const childIndent = indent + (indent ? (isLast ? '   ' : '│  ') : '');
-          const childLines = children.map((c, i) => renderTree(c, childIndent, i === children.length - 1));
-          return [line, ...childLines].join('\n');
-        }
-
-        const tree = renderTree(root, '', true);
-        return { content: [{ type: "text", text: tree }] };
       }
 
       default:
