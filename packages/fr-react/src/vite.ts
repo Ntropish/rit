@@ -18,6 +18,7 @@ import {
   generateComponentFile,
   generateComponentDeclaration,
   setSymbols,
+  setImportPrefix,
   type ComponentEntity,
   type SymbolRegistry,
 } from './components.js';
@@ -183,6 +184,7 @@ export function frReact(options: FrReactViteOptions = {}): Plugin {
         createContext: { source: 'react', isDefault: false },
       };
       registerSymbols({ ...defaultSymbols, ...options.symbols });
+      setImportPrefix(prefix);
 
       dbHandle = openSqliteStore(ritFile);
       repo = await Repository.init(dbHandle.store, dbHandle.refStore);

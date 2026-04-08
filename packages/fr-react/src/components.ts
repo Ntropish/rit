@@ -17,9 +17,19 @@ export type SymbolRegistry = Record<string, { source: string; isDefault: boolean
  * they are merged here before materialization.
  */
 let activeSymbols: SymbolRegistry = {};
+let componentImportPrefix: string | null = null;
 
 export function setSymbols(symbols: SymbolRegistry): void {
   activeSymbols = symbols;
+}
+
+/**
+ * Set a prefix for cross-component imports.
+ * When set, components import each other via the prefix (e.g., @components/Name)
+ * instead of relative file paths.
+ */
+export function setImportPrefix(prefix: string | null): void {
+  componentImportPrefix = prefix;
 }
 
 // ── Component entity types ──────────────────────────────
@@ -88,13 +98,18 @@ function resolveImports(
       if (allComponentNames.has(refName)) {
         const refFile = componentFileMap.get(refName);
         if (refFile && refFile !== currentFile) {
-          // Compute relative import path
-          const fromDir = dirname(currentFile);
-          let relPath = relative(fromDir, refFile).split('\\').join('/');
-          if (!relPath.startsWith('.')) relPath = './' + relPath;
-          // Strip .tsx extension
-          relPath = relPath.replace(/\.tsx$/, '');
-          const entry = ensureImport(relPath);
+          let importPath: string;
+          if (componentImportPrefix) {
+            // Use alias: @components/ComponentName
+            importPath = `${componentImportPrefix}/${refName}`;
+          } else {
+            // Compute relative import path
+            const fromDir = dirname(currentFile);
+            importPath = relative(fromDir, refFile).split('\\').join('/');
+            if (!importPath.startsWith('.')) importPath = './' + importPath;
+            importPath = importPath.replace(/\.tsx$/, '');
+          }
+          const entry = ensureImport(importPath);
           entry.named.add(refName);
         }
       }
