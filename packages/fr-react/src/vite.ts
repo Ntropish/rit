@@ -1,12 +1,13 @@
 /**
  * fr-react Vite plugin.
  *
- * Serves component entities as virtual modules during development.
+ * Serves component entities as virtual modules. No TSX files are written to disk.
+ * Emits a single .d.ts declaration file so TypeScript resolves types for all
+ * entity-based components.
  * Watches the .rit file for changes and triggers HMR.
- * Emits .d.ts declarations so TypeScript resolves types for entity-based components.
  */
 
-import { existsSync, writeFileSync, readFileSync, mkdirSync, watch, type FSWatcher } from 'fs';
+import { existsSync, writeFileSync, mkdirSync, watch, type FSWatcher } from 'fs';
 import { join, dirname, resolve } from 'path';
 import type { Plugin, ViteDevServer } from 'vite';
 import { openSqliteStore } from '../../../src/store/sqlite.js';
@@ -26,8 +27,8 @@ export interface FrReactViteOptions {
   ritFile?: string;
   /** Additional symbols for auto-import resolution */
   symbols?: SymbolRegistry;
-  /** Directory for .d.ts output (default: src/) */
-  dtsDir?: string;
+  /** Path for the single .d.ts declaration file (default: src/generated/entities.d.ts) */
+  dtsPath?: string;
 }
 
 function findRitFile(dir: string): string | null {
@@ -46,6 +47,7 @@ export function frReact(options: FrReactViteOptions = {}): Plugin {
   let rootDir: string;
   let repo: Repository;
   let dbHandle: ReturnType<typeof openSqliteStore>;
+  let dtsPath: string;
 
   // Cached entity state
   let components: ComponentEntity[] = [];
@@ -53,32 +55,63 @@ export function frReact(options: FrReactViteOptions = {}): Plugin {
   let allComponentNames: Set<string> = new Set();
   let componentFileMap: Map<string, string> = new Map();
 
+  // Map of absolute file paths (normalized) to their generated code
+  let codeCache: Map<string, string> = new Map();
+
   async function loadEntities() {
     components = await readComponents(repo);
     const maps = buildComponentMaps(components);
     fileGroups = maps.fileGroups;
     allComponentNames = maps.allComponentNames;
     componentFileMap = maps.componentFileMap;
+
+    // Rebuild code cache
+    codeCache = new Map();
+    for (const [filePath, comps] of fileGroups) {
+      const code = generateComponentFile(comps, allComponentNames, componentFileMap, filePath);
+      const absPath = resolve(rootDir, filePath).replace(/\\/g, '/');
+      codeCache.set(absPath, code);
+    }
   }
 
   /**
-   * Write component TSX files and .d.ts declarations to disk.
-   * Files are real on disk so esbuild, TypeScript, and Vite all work natively.
-   * The plugin watches the .rit file and regenerates on change.
+   * Emit a single .d.ts declaration file covering all entity components.
+   * Each component's module is declared so TypeScript can resolve imports.
    */
-  function writeFiles() {
-    for (const [filePath, comps] of fileGroups) {
-      const code = generateComponentFile(comps, allComponentNames, componentFileMap, filePath);
-      const fullPath = join(rootDir, filePath);
-      const dir = dirname(fullPath);
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      writeFileSync(fullPath, code);
+  function emitDeclarationFile() {
+    const sections: string[] = [];
+    const dtsDir = dirname(dtsPath);
 
-      // Also emit .d.ts for TypeScript
-      const dtsContent = generateComponentDeclaration(comps);
-      const dtsPath = fullPath.replace(/\.tsx$/, '.d.ts');
-      writeFileSync(dtsPath, dtsContent);
+    for (const [filePath, comps] of fileGroups) {
+      // Compute the module path relative to the declaration file's directory
+      const modulePath = filePath.replace(/\.tsx$/, '');
+      const fromDts = dtsDir;
+      // Both paths are relative to rootDir; compute relative path between them
+      let relModule: string;
+      const moduleParts = modulePath.split('/');
+      const dtsParts = fromDts.split('/');
+      // Find common prefix
+      let common = 0;
+      while (common < dtsParts.length && common < moduleParts.length && dtsParts[common] === moduleParts[common]) {
+        common++;
+      }
+      const ups = dtsParts.length - common;
+      const remaining = moduleParts.slice(common).join('/');
+      relModule = (ups > 0 ? '../'.repeat(ups) : './') + remaining;
+
+      const decls = comps.map(comp => {
+        const exportKw = comp.export === 'default' ? 'export default ' : comp.export === 'named' ? 'export ' : '';
+        const propsType = comp.props || '{}';
+        return `  ${exportKw}function ${comp.name}(props: ${propsType}): JSX.Element`;
+      });
+      sections.push(`declare module '${relModule}' {\n${decls.join('\n')}\n}`);
     }
+
+    const content = sections.join('\n\n') + '\n';
+    const fullDtsPath = join(rootDir, dtsPath);
+    const dir = dirname(fullDtsPath);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    writeFileSync(fullDtsPath, content);
   }
 
   return {
@@ -88,12 +121,12 @@ export function frReact(options: FrReactViteOptions = {}): Plugin {
     async configResolved(config) {
       rootDir = config.root;
       ritFile = options.ritFile ?? findRitFile(rootDir) ?? join(rootDir, '.rit');
+      dtsPath = options.dtsPath ?? 'src/generated/entities.d.ts';
 
       if (!existsSync(ritFile)) {
         throw new Error(`fr-react: .rit file not found at ${ritFile}`);
       }
 
-      // Merge default React symbols with any provided symbols
       const defaultSymbols: SymbolRegistry = {
         useState: { source: 'react', isDefault: false },
         useEffect: { source: 'react', isDefault: false },
@@ -114,7 +147,68 @@ export function frReact(options: FrReactViteOptions = {}): Plugin {
       dbHandle = openSqliteStore(ritFile);
       repo = await Repository.init(dbHandle.store, dbHandle.refStore);
       await loadEntities();
-      writeFiles();
+      emitDeclarationFile();
+    },
+
+    config() {
+      return {
+        optimizeDeps: {
+          esbuildOptions: {
+            plugins: [{
+              name: 'fr-react-esbuild',
+              setup(build) {
+                // Resolve component entity paths during dep scanning
+                build.onResolve({ filter: /.*/ }, (args) => {
+                  if (args.kind !== 'import-statement') return null;
+                  const resolved = resolve(dirname(args.importer), args.path).replace(/\\/g, '/');
+                  const candidates = resolved.endsWith('.tsx') || resolved.endsWith('.ts')
+                    ? [resolved]
+                    : [resolved + '.tsx', resolved + '.ts'];
+
+                  for (const candidate of candidates) {
+                    if (codeCache.has(candidate)) {
+                      return { path: candidate, namespace: 'fr-react' };
+                    }
+                  }
+                  return null;
+                });
+
+                build.onLoad({ filter: /.*/, namespace: 'fr-react' }, (args) => {
+                  const code = codeCache.get(args.path.replace(/\\/g, '/'));
+                  if (code) {
+                    return { contents: code, loader: 'tsx' };
+                  }
+                  return null;
+                });
+              },
+            }],
+          },
+        },
+      };
+    },
+
+    resolveId(source, importer) {
+      if (!importer) return null;
+      if (!source.startsWith('.') && !source.startsWith('/')) return null;
+
+      const importerDir = dirname(importer);
+      const resolved = resolve(importerDir, source).replace(/\\/g, '/');
+      const candidates = resolved.endsWith('.tsx') || resolved.endsWith('.ts')
+        ? [resolved]
+        : [resolved + '.tsx', resolved + '.ts'];
+
+      for (const candidate of candidates) {
+        if (codeCache.has(candidate)) {
+          return candidate;
+        }
+      }
+
+      return null;
+    },
+
+    load(id) {
+      const normalId = id.replace(/\\/g, '/');
+      return codeCache.get(normalId) ?? null;
     },
 
     configureServer(server: ViteDevServer) {
@@ -122,51 +216,45 @@ export function frReact(options: FrReactViteOptions = {}): Plugin {
 
       async function handleRitChange() {
         try {
-          // Re-open the database to pick up WAL changes
           dbHandle.close();
           dbHandle = openSqliteStore(ritFile);
           repo = await Repository.init(dbHandle.store, dbHandle.refStore);
 
-          const oldFiles = new Set(fileGroups.keys());
+          const oldCache = new Map(codeCache);
           await loadEntities();
-          const newFiles = new Set(fileGroups.keys());
+          emitDeclarationFile();
 
-          // Determine changed files
-          const changed = new Set<string>();
-          for (const f of newFiles) {
-            const comps = fileGroups.get(f)!;
-            const code = generateComponentFile(comps, allComponentNames, componentFileMap, f);
-            const fullPath = join(rootDir, f);
-            const existing = existsSync(fullPath) ? readFileSync(fullPath, 'utf-8') : null;
-            if (existing !== code) {
-              changed.add(f);
+          // Find changed modules
+          const changed: string[] = [];
+          for (const [absPath, code] of codeCache) {
+            if (oldCache.get(absPath) !== code) {
+              changed.push(absPath);
+            }
+          }
+          // Also check for removed modules
+          for (const absPath of oldCache.keys()) {
+            if (!codeCache.has(absPath)) {
+              changed.push(absPath);
             }
           }
 
-          if (changed.size > 0 || oldFiles.size !== newFiles.size) {
-            writeFiles();
-
-            // Trigger HMR for changed files
-            const changedPaths = [...changed].map(f => join(rootDir, f));
-            for (const p of changedPaths) {
-              const mod = server.moduleGraph.getModulesByFile(p.replace(/\\/g, '/'))?.values().next().value;
+          if (changed.length > 0) {
+            for (const p of changed) {
+              const mod = server.moduleGraph.getModuleById(p);
               if (mod) server.moduleGraph.invalidateModule(mod);
             }
             server.ws.send({ type: 'full-reload' });
           }
         } catch {
-          // .rit file might be mid-write; the next fs event will retry
+          // .rit file might be mid-write
         }
       }
 
-      // Watch the .rit file and its directory for changes using OS file notifications.
-      // We watch the directory to catch WAL file creation/deletion events too.
       const watchers: FSWatcher[] = [];
       const ritDir = dirname(ritFile);
       const ritBasename = ritFile.split(/[/\\]/).pop()!;
 
       const dirWatcher = watch(ritDir, (eventType, filename) => {
-        // Only react to changes to the .rit file or its WAL/SHM
         if (!filename) return;
         if (!filename.startsWith(ritBasename)) return;
         if (debounceTimer) clearTimeout(debounceTimer);
