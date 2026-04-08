@@ -27,8 +27,6 @@ export interface FrReactViteOptions {
   ritFile?: string;
   /** Additional symbols for auto-import resolution */
   symbols?: SymbolRegistry;
-  /** Path for the single .d.ts declaration file (default: src/generated/entities.d.ts) */
-  dtsPath?: string;
 }
 
 function findRitFile(dir: string): string | null {
@@ -47,8 +45,6 @@ export function frReact(options: FrReactViteOptions = {}): Plugin {
   let rootDir: string;
   let repo: Repository;
   let dbHandle: ReturnType<typeof openSqliteStore>;
-  let dtsPath: string;
-
   // Cached entity state
   let components: ComponentEntity[] = [];
   let fileGroups: Map<string, ComponentEntity[]> = new Map();
@@ -75,43 +71,18 @@ export function frReact(options: FrReactViteOptions = {}): Plugin {
   }
 
   /**
-   * Emit a single .d.ts declaration file covering all entity components.
-   * Each component's module is declared so TypeScript can resolve imports.
+   * Emit .d.ts declaration files at component paths.
+   * TypeScript needs these to resolve types for virtual modules.
+   * Only .d.ts files are written; no .tsx source code on disk.
    */
-  function emitDeclarationFile() {
-    const sections: string[] = [];
-    const dtsDir = dirname(dtsPath);
-
+  function emitDeclarations() {
     for (const [filePath, comps] of fileGroups) {
-      // Compute the module path relative to the declaration file's directory
-      const modulePath = filePath.replace(/\.tsx$/, '');
-      const fromDts = dtsDir;
-      // Both paths are relative to rootDir; compute relative path between them
-      let relModule: string;
-      const moduleParts = modulePath.split('/');
-      const dtsParts = fromDts.split('/');
-      // Find common prefix
-      let common = 0;
-      while (common < dtsParts.length && common < moduleParts.length && dtsParts[common] === moduleParts[common]) {
-        common++;
-      }
-      const ups = dtsParts.length - common;
-      const remaining = moduleParts.slice(common).join('/');
-      relModule = (ups > 0 ? '../'.repeat(ups) : './') + remaining;
-
-      const decls = comps.map(comp => {
-        const exportKw = comp.export === 'default' ? 'export default ' : comp.export === 'named' ? 'export ' : '';
-        const propsType = comp.props || '{}';
-        return `  ${exportKw}function ${comp.name}(props: ${propsType}): JSX.Element`;
-      });
-      sections.push(`declare module '${relModule}' {\n${decls.join('\n')}\n}`);
+      const dtsContent = generateComponentDeclaration(comps);
+      const dtsFilePath = join(rootDir, filePath.replace(/\.tsx$/, '.d.ts'));
+      const dir = dirname(dtsFilePath);
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      writeFileSync(dtsFilePath, dtsContent);
     }
-
-    const content = sections.join('\n\n') + '\n';
-    const fullDtsPath = join(rootDir, dtsPath);
-    const dir = dirname(fullDtsPath);
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(fullDtsPath, content);
   }
 
   return {
@@ -121,8 +92,6 @@ export function frReact(options: FrReactViteOptions = {}): Plugin {
     async configResolved(config) {
       rootDir = config.root;
       ritFile = options.ritFile ?? findRitFile(rootDir) ?? join(rootDir, '.rit');
-      dtsPath = options.dtsPath ?? 'src/generated/entities.d.ts';
-
       if (!existsSync(ritFile)) {
         throw new Error(`fr-react: .rit file not found at ${ritFile}`);
       }
@@ -147,7 +116,7 @@ export function frReact(options: FrReactViteOptions = {}): Plugin {
       dbHandle = openSqliteStore(ritFile);
       repo = await Repository.init(dbHandle.store, dbHandle.refStore);
       await loadEntities();
-      emitDeclarationFile();
+      emitDeclarations();
     },
 
     config() {
@@ -222,7 +191,7 @@ export function frReact(options: FrReactViteOptions = {}): Plugin {
 
           const oldCache = new Map(codeCache);
           await loadEntities();
-          emitDeclarationFile();
+          emitDeclarations();
 
           // Find changed modules
           const changed: string[] = [];
