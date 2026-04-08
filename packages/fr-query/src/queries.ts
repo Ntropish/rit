@@ -82,6 +82,11 @@ function generateQueryHook(key: string, fields: Record<string, string>): string 
   const id = key.slice('query:'.length);
   const hookName = `use${toPascalCase(id)}Query`;
 
+  // params field defines the hook's parameter interface
+  const hasParams = !!fields.params;
+  const paramsType = fields.params || '';
+  const paramsArg = hasParams ? `params: ${paramsType}` : '';
+
   // queryKey is required
   const queryKey = fields.queryKey || id;
   // Support array-style keys or simple string keys
@@ -91,7 +96,7 @@ function generateQueryHook(key: string, fields: Record<string, string>): string 
   optionLines.push(`queryKey: ${queryKeyExpr}`);
 
   for (const [field, value] of Object.entries(fields)) {
-    if (field === 'queryKey') continue; // already handled
+    if (field === 'queryKey' || field === 'params') continue;
 
     if (field === 'queryFn') {
       optionLines.push(`queryFn: ${wrapAsFunction(value, 'context')}`);
@@ -111,7 +116,7 @@ function generateQueryHook(key: string, fields: Record<string, string>): string 
     }
   }
 
-  return `export function ${hookName}() {
+  return `export function ${hookName}(${paramsArg}) {
   return useQuery({
     ${optionLines.join(',\n    ')},
   })
