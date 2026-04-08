@@ -27,6 +27,10 @@ export interface FrReactViteOptions {
   ritFile?: string;
   /** Additional symbols for auto-import resolution */
   symbols?: SymbolRegistry;
+  /** Import prefix for entity components (default: @components) */
+  prefix?: string;
+  /** Path for the declaration file (default: src/entities.d.ts) */
+  dtsPath?: string;
 }
 
 function findRitFile(dir: string): string | null {
@@ -45,13 +49,17 @@ export function frReact(options: FrReactViteOptions = {}): Plugin {
   let rootDir: string;
   let repo: Repository;
   let dbHandle: ReturnType<typeof openSqliteStore>;
+  let prefix: string;
+  let dtsPath: string;
+
   // Cached entity state
   let components: ComponentEntity[] = [];
   let fileGroups: Map<string, ComponentEntity[]> = new Map();
   let allComponentNames: Set<string> = new Set();
   let componentFileMap: Map<string, string> = new Map();
 
-  // Map of absolute file paths (normalized) to their generated code
+  // Map of aliased module IDs to their generated code
+  // e.g., "@components/Hello" -> generated TSX code
   let codeCache: Map<string, string> = new Map();
 
   async function loadEntities() {
@@ -61,28 +69,48 @@ export function frReact(options: FrReactViteOptions = {}): Plugin {
     allComponentNames = maps.allComponentNames;
     componentFileMap = maps.componentFileMap;
 
-    // Rebuild code cache
+    // Rebuild code cache keyed by alias
     codeCache = new Map();
     for (const [filePath, comps] of fileGroups) {
       const code = generateComponentFile(comps, allComponentNames, componentFileMap, filePath);
-      const absPath = resolve(rootDir, filePath).replace(/\\/g, '/');
-      codeCache.set(absPath, code);
+      // Convert file path to alias: src/components/Hello.tsx -> @components/Hello
+      const alias = filePathToAlias(filePath);
+      codeCache.set(alias, code);
     }
   }
 
   /**
-   * Emit .d.ts declaration files at component paths.
-   * TypeScript needs these to resolve types for virtual modules.
-   * Only .d.ts files are written; no .tsx source code on disk.
+   * Convert a component file path to its import alias.
+   * e.g., "src/components/Hello.tsx" -> "@components/Hello"
    */
-  function emitDeclarations() {
+  function filePathToAlias(filePath: string): string {
+    // Strip the common src/ prefix and .tsx extension
+    const stripped = filePath.replace(/\.tsx$/, '');
+    return prefix + '/' + stripped.split('/').pop()!;
+  }
+
+  /**
+   * Emit a single .d.ts declaration file covering all entity components.
+   * Uses non-relative module declarations that match the path alias.
+   */
+  function emitDeclarationFile() {
+    const sections: string[] = [];
+
     for (const [filePath, comps] of fileGroups) {
-      const dtsContent = generateComponentDeclaration(comps);
-      const dtsFilePath = join(rootDir, filePath.replace(/\.tsx$/, '.d.ts'));
-      const dir = dirname(dtsFilePath);
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      writeFileSync(dtsFilePath, dtsContent);
+      const alias = filePathToAlias(filePath);
+      const decls = comps.map(comp => {
+        const exportKw = comp.export === 'default' ? 'export default ' : comp.export === 'named' ? 'export ' : '';
+        const propsType = comp.props || '{}';
+        return `  ${exportKw}function ${comp.name}(props: ${propsType}): JSX.Element`;
+      });
+      sections.push(`declare module '${alias}' {\n${decls.join('\n')}\n}`);
     }
+
+    const content = sections.join('\n\n') + '\n';
+    const fullPath = join(rootDir, dtsPath);
+    const dir = dirname(fullPath);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    writeFileSync(fullPath, content);
   }
 
   return {
@@ -92,6 +120,9 @@ export function frReact(options: FrReactViteOptions = {}): Plugin {
     async configResolved(config) {
       rootDir = config.root;
       ritFile = options.ritFile ?? findRitFile(rootDir) ?? join(rootDir, '.rit');
+      prefix = options.prefix ?? '@components';
+      dtsPath = options.dtsPath ?? 'src/entities.d.ts';
+
       if (!existsSync(ritFile)) {
         throw new Error(`fr-react: .rit file not found at ${ritFile}`);
       }
@@ -116,7 +147,7 @@ export function frReact(options: FrReactViteOptions = {}): Plugin {
       dbHandle = openSqliteStore(ritFile);
       repo = await Repository.init(dbHandle.store, dbHandle.refStore);
       await loadEntities();
-      emitDeclarations();
+      emitDeclarationFile();
     },
 
     config() {
@@ -126,24 +157,17 @@ export function frReact(options: FrReactViteOptions = {}): Plugin {
             plugins: [{
               name: 'fr-react-esbuild',
               setup(build) {
-                // Resolve component entity paths during dep scanning
-                build.onResolve({ filter: /.*/ }, (args) => {
-                  if (args.kind !== 'import-statement') return null;
-                  const resolved = resolve(dirname(args.importer), args.path).replace(/\\/g, '/');
-                  const candidates = resolved.endsWith('.tsx') || resolved.endsWith('.ts')
-                    ? [resolved]
-                    : [resolved + '.tsx', resolved + '.ts'];
-
-                  for (const candidate of candidates) {
-                    if (codeCache.has(candidate)) {
-                      return { path: candidate, namespace: 'fr-react' };
-                    }
+                // Resolve @components/* imports during dep scanning
+                const prefixPattern = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/`);
+                build.onResolve({ filter: prefixPattern }, (args) => {
+                  if (codeCache.has(args.path)) {
+                    return { path: args.path, namespace: 'fr-react' };
                   }
                   return null;
                 });
 
                 build.onLoad({ filter: /.*/, namespace: 'fr-react' }, (args) => {
-                  const code = codeCache.get(args.path.replace(/\\/g, '/'));
+                  const code = codeCache.get(args.path);
                   if (code) {
                     return { contents: code, loader: 'tsx' };
                   }
@@ -156,28 +180,23 @@ export function frReact(options: FrReactViteOptions = {}): Plugin {
       };
     },
 
-    resolveId(source, importer) {
-      if (!importer) return null;
-      if (!source.startsWith('.') && !source.startsWith('/')) return null;
-
-      const importerDir = dirname(importer);
-      const resolved = resolve(importerDir, source).replace(/\\/g, '/');
-      const candidates = resolved.endsWith('.tsx') || resolved.endsWith('.ts')
-        ? [resolved]
-        : [resolved + '.tsx', resolved + '.ts'];
-
-      for (const candidate of candidates) {
-        if (codeCache.has(candidate)) {
-          return candidate;
-        }
+    resolveId(source) {
+      // Match imports starting with the prefix (e.g., @components/Hello)
+      if (codeCache.has(source)) {
+        // Return a path that looks like a real .tsx file so @vitejs/plugin-react
+        // applies JSX transforms. No \0 prefix, which would skip other plugins.
+        return resolve(rootDir, '.fr-react', source + '.tsx');
       }
-
       return null;
     },
 
     load(id) {
+      // Match our virtual paths: <rootDir>/.fr-react/@components/Hello.tsx
       const normalId = id.replace(/\\/g, '/');
-      return codeCache.get(normalId) ?? null;
+      const virtualDir = resolve(rootDir, '.fr-react').replace(/\\/g, '/');
+      if (!normalId.startsWith(virtualDir)) return null;
+      const alias = normalId.slice(virtualDir.length + 1).replace(/\.tsx$/, '');
+      return codeCache.get(alias) ?? null;
     },
 
     configureServer(server: ViteDevServer) {
@@ -191,25 +210,24 @@ export function frReact(options: FrReactViteOptions = {}): Plugin {
 
           const oldCache = new Map(codeCache);
           await loadEntities();
-          emitDeclarations();
+          emitDeclarationFile();
 
           // Find changed modules
           const changed: string[] = [];
-          for (const [absPath, code] of codeCache) {
-            if (oldCache.get(absPath) !== code) {
-              changed.push(absPath);
+          for (const [alias, code] of codeCache) {
+            if (oldCache.get(alias) !== code) {
+              changed.push(resolve(rootDir, '.fr-react', alias + '.tsx'));
             }
           }
-          // Also check for removed modules
-          for (const absPath of oldCache.keys()) {
-            if (!codeCache.has(absPath)) {
-              changed.push(absPath);
+          for (const alias of oldCache.keys()) {
+            if (!codeCache.has(alias)) {
+              changed.push(resolve(rootDir, '.fr-react', alias + '.tsx'));
             }
           }
 
           if (changed.length > 0) {
-            for (const p of changed) {
-              const mod = server.moduleGraph.getModuleById(p);
+            for (const id of changed) {
+              const mod = server.moduleGraph.getModuleById(id);
               if (mod) server.moduleGraph.invalidateModule(mod);
             }
             server.ws.send({ type: 'full-reload' });
