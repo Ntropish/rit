@@ -7,7 +7,7 @@
  * Watches the .rit file for changes and triggers HMR.
  */
 
-import { existsSync, writeFileSync, mkdirSync, watch, type FSWatcher } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, watch, type FSWatcher } from 'fs';
 import { join, dirname, resolve } from 'path';
 import type { Plugin, ViteDevServer } from 'vite';
 import { openSqliteStore } from '../../../src/store/sqlite.js';
@@ -43,6 +43,36 @@ function findRitFile(dir: string): string | null {
     current = parent;
   }
 }
+
+/**
+ * Update a named section in a shared .d.ts file.
+ * Each section is delimited by marker comments. Other sections are preserved.
+ */
+function updateDtsSection(fullPath: string, sectionName: string, content: string): void {
+  const dir = dirname(fullPath);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+
+  const existing = existsSync(fullPath) ? readFileSync(fullPath, 'utf-8') : '';
+  const startMarker = `// --- ${sectionName} start ---`;
+  const endMarker = `// --- ${sectionName} end ---`;
+  const section = `${startMarker}\n${content}\n${endMarker}`;
+
+  const startIdx = existing.indexOf(startMarker);
+  const endIdx = existing.indexOf(endMarker);
+
+  let result: string;
+  if (startIdx !== -1 && endIdx !== -1) {
+    // Replace existing section
+    result = existing.slice(0, startIdx) + section + existing.slice(endIdx + endMarker.length);
+  } else {
+    // Append new section
+    result = existing ? existing.trimEnd() + '\n\n' + section + '\n' : section + '\n';
+  }
+
+  writeFileSync(fullPath, result);
+}
+
+export { updateDtsSection };
 
 export function frReact(options: FrReactViteOptions = {}): Plugin {
   let ritFile: string;
@@ -106,11 +136,8 @@ export function frReact(options: FrReactViteOptions = {}): Plugin {
       sections.push(`declare module '${alias}' {\n${decls.join('\n')}\n}`);
     }
 
-    const content = sections.join('\n\n') + '\n';
-    const fullPath = join(rootDir, dtsPath);
-    const dir = dirname(fullPath);
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(fullPath, content);
+    const block = sections.join('\n\n');
+    updateDtsSection(join(rootDir, dtsPath), 'fr-react', block);
   }
 
   return {

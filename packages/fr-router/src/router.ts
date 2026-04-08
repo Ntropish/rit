@@ -107,11 +107,17 @@ function generateRouterCode(
       const info = componentMap.get(ref);
       if (!info) continue;
 
-      // Compute relative import path from output file to component file
-      const outputDir = dirname(outputFile);
-      let relPath = relative(outputDir, info.file).split('\\').join('/');
-      if (!relPath.startsWith('.')) relPath = './' + relPath;
-      relPath = relPath.replace(/\.tsx$/, '');
+      // Compute import path for the component
+      let relPath: string;
+      if (!outputFile) {
+        // Using aliases: file field is already the import path (e.g., @components/Hello)
+        relPath = info.file;
+      } else {
+        const outputDir = dirname(outputFile);
+        relPath = relative(outputDir, info.file).split('\\').join('/');
+        if (!relPath.startsWith('.')) relPath = './' + relPath;
+        relPath = relPath.replace(/\.tsx$/, '');
+      }
 
       componentImports.set(ref, { name: info.name, from: relPath });
     }
@@ -274,6 +280,37 @@ export async function writeRoute(repo: Repository, route: RouteEntity): Promise<
 }
 
 /**
+ * Generate router code from the repo without writing to disk.
+ * componentPrefix controls how components are imported (e.g., '@components').
+ */
+export async function generateRouterFromRepo(
+  repo: Repository,
+  componentPrefix?: string,
+): Promise<string | null> {
+  const routes = await readRoutes(repo);
+  if (routes.length === 0) return null;
+
+  const tree = buildRouteTree(routes);
+  if (!tree) return null;
+
+  // Build component info map from component entities
+  const componentMap = new Map<string, ComponentInfo>();
+  for await (const key of repo.keys('component:*')) {
+    const fields = await repo.hgetall(key);
+    if (fields.name) {
+      if (componentPrefix) {
+        // Use alias: @components/ComponentName
+        componentMap.set(key, { name: fields.name, file: `${componentPrefix}/${fields.name}` });
+      } else if (fields.file) {
+        componentMap.set(key, { name: fields.name, file: fields.file });
+      }
+    }
+  }
+
+  return generateRouterCode(tree, componentMap, '', '');
+}
+
+/**
  * Materialize all route entities into a TanStack Router configuration file.
  */
 export async function materializeRouter(
@@ -290,7 +327,6 @@ export async function materializeRouter(
     return null;
   }
 
-  // Build component info map from component entities
   const componentMap = new Map<string, ComponentInfo>();
   for await (const key of repo.keys('component:*')) {
     const fields = await repo.hgetall(key);

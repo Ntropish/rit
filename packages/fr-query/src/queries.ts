@@ -210,6 +210,37 @@ export async function writeMutation(repo: Repository, key: string, fields: Recor
 }
 
 /**
+ * Generate the queries/mutations code string without writing to disk.
+ */
+export function generateQueriesCode(
+  queries: Array<{ key: string; fields: Record<string, string> }>,
+  mutations: Array<{ key: string; fields: Record<string, string> }>,
+): string | null {
+  if (queries.length === 0 && mutations.length === 0) return null;
+
+  const tanstackImports: string[] = [];
+
+  if (queries.length > 0) tanstackImports.push('useQuery');
+  if (mutations.length > 0) {
+    tanstackImports.push('useMutation');
+    const needsQueryClient = mutations.some(m =>
+      ['onSuccess', 'onError', 'onSettled', 'onMutate'].some(
+        f => m.fields[f]?.includes('queryClient')
+      )
+    );
+    if (needsQueryClient) tanstackImports.push('useQueryClient');
+  }
+
+  const imports = [`import { ${tanstackImports.join(', ')} } from '@tanstack/react-query'`];
+
+  const hooks: string[] = [];
+  for (const q of queries) hooks.push(generateQueryHook(q.key, q.fields));
+  for (const m of mutations) hooks.push(generateMutationHook(m.key, m.fields));
+
+  return [imports.join('\n'), '', ...hooks, ''].join('\n\n');
+}
+
+/**
  * Materialize all query and mutation entities into a hooks file.
  */
 export async function materializeQueries(
@@ -220,39 +251,13 @@ export async function materializeQueries(
   const queries = await readQueries(repo);
   const mutations = await readMutations(repo);
 
-  if (queries.length === 0 && mutations.length === 0) return null;
-
-  const imports: string[] = [];
-  const tanstackImports: string[] = [];
-
-  if (queries.length > 0) tanstackImports.push('useQuery');
-  if (mutations.length > 0) {
-    tanstackImports.push('useMutation');
-    // Check if any mutation needs queryClient
-    const needsQueryClient = mutations.some(m =>
-      ['onSuccess', 'onError', 'onSettled', 'onMutate'].some(
-        f => m.fields[f]?.includes('queryClient')
-      )
-    );
-    if (needsQueryClient) tanstackImports.push('useQueryClient');
-  }
-
-  imports.push(`import { ${tanstackImports.join(', ')} } from '@tanstack/react-query'`);
-
-  const hooks: string[] = [];
-  for (const q of queries) {
-    hooks.push(generateQueryHook(q.key, q.fields));
-  }
-  for (const m of mutations) {
-    hooks.push(generateMutationHook(m.key, m.fields));
-  }
-
-  const output = [imports.join('\n'), '', ...hooks, ''].join('\n\n');
+  const code = generateQueriesCode(queries, mutations);
+  if (!code) return null;
 
   const fullPath = join(rootDir, outputPath);
   const dir = dirname(fullPath);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  writeFileSync(fullPath, output);
+  writeFileSync(fullPath, code);
 
   return outputPath;
 }
