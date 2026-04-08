@@ -4,6 +4,9 @@
   "description": "TanStack Router plugin for fs-rit: route entity materialization",
   "type": "module",
   "main": "src/index.ts",
+  "bin": {
+    "fr-router": "src/cli.ts"
+  },
   "scripts": {
     "test": "vitest run"
   },
