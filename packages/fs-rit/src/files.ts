@@ -6,7 +6,7 @@
  * Binary files are base64-encoded with a prefix marker.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, unlinkSync, rmdirSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'fs';
 import { join, relative, dirname, sep } from 'path';
 import type { Repository } from '../../../src/repo/index.js';
 
@@ -58,26 +58,86 @@ const DEFAULT_IGNORE_FILES = [
   '.rit-journal',
 ];
 
-function shouldIgnore(relativePath: string): boolean {
+/**
+ * Parse a .ritignore file into a list of matchers.
+ * Supports:
+ * - Exact directory names (e.g., "node_modules")
+ * - Glob patterns with * (e.g., "src/generated/*")
+ * - Directory patterns ending with / (e.g., "dist/")
+ * - Negation with ! prefix
+ * - Comments with #
+ */
+function parseRitIgnore(rootDir: string): Array<{ pattern: string; negate: boolean }> {
+  const ignorePath = join(rootDir, '.ritignore');
+  if (!existsSync(ignorePath)) return [];
+
+  const content = readFileSync(ignorePath, 'utf-8');
+  const rules: Array<{ pattern: string; negate: boolean }> = [];
+
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+
+    if (trimmed.startsWith('!')) {
+      rules.push({ pattern: trimmed.slice(1), negate: true });
+    } else {
+      rules.push({ pattern: trimmed, negate: false });
+    }
+  }
+
+  return rules;
+}
+
+function matchesPattern(path: string, pattern: string): boolean {
+  // Strip trailing slash (directory marker)
+  const p = pattern.endsWith('/') ? pattern.slice(0, -1) : pattern;
+
+  // Check if any path segment matches the pattern exactly (like .gitignore directory matching)
+  const parts = path.split(/[/\\]/);
+  if (parts.some(part => part === p)) return true;
+
+  // Glob matching: convert pattern to regex
+  let regex = '';
+  for (const ch of p) {
+    if (ch === '*') regex += '[^/]*';
+    else if (ch === '?') regex += '[^/]';
+    else if ('.+^${}()|[]\\'.includes(ch)) regex += '\\' + ch;
+    else regex += ch;
+  }
+  return new RegExp(`^${regex}$`).test(path);
+}
+
+function shouldIgnore(relativePath: string, ignoreRules?: Array<{ pattern: string; negate: boolean }>): boolean {
   const parts = relativePath.split(/[/\\]/);
   if (parts.some(p => DEFAULT_IGNORE.includes(p))) return true;
   const filename = parts[parts.length - 1];
   if (DEFAULT_IGNORE_FILES.includes(filename)) return true;
+
+  if (ignoreRules) {
+    let ignored = false;
+    for (const rule of ignoreRules) {
+      if (matchesPattern(relativePath, rule.pattern)) {
+        ignored = !rule.negate;
+      }
+    }
+    if (ignored) return true;
+  }
+
   return false;
 }
 
 /**
  * Recursively collect all file paths under a directory.
  */
-function collectFiles(dir: string, base: string): string[] {
+function collectFiles(dir: string, base: string, ignoreRules?: Array<{ pattern: string; negate: boolean }>): string[] {
   const results: string[] = [];
   const entries = readdirSync(dir, { withFileTypes: true });
   for (const entry of entries) {
     const fullPath = join(dir, entry.name);
     const relPath = relative(base, fullPath).split(sep).join('/');
-    if (shouldIgnore(relPath)) continue;
+    if (shouldIgnore(relPath, ignoreRules)) continue;
     if (entry.isDirectory()) {
-      results.push(...collectFiles(fullPath, base));
+      results.push(...collectFiles(fullPath, base, ignoreRules));
     } else if (entry.isFile()) {
       results.push(relPath);
     }
@@ -126,7 +186,8 @@ export async function addFiles(repo: Repository, rootDir: string, paths: string[
  * Add all files under the root directory to the working tree.
  */
 export async function addAll(repo: Repository, rootDir: string): Promise<string[]> {
-  const files = collectFiles(rootDir, rootDir);
+  const ignoreRules = parseRitIgnore(rootDir);
+  const files = collectFiles(rootDir, rootDir, ignoreRules);
   return addFiles(repo, rootDir, files);
 }
 
@@ -134,7 +195,8 @@ export async function addAll(repo: Repository, rootDir: string): Promise<string[
  * Get the status of files: what's changed between disk, working tree, and last commit.
  */
 export async function status(repo: Repository, rootDir: string): Promise<FileStatus> {
-  const diskFiles = new Set(collectFiles(rootDir, rootDir));
+  const ignoreRules = parseRitIgnore(rootDir);
+  const diskFiles = new Set(collectFiles(rootDir, rootDir, ignoreRules));
   const storeFiles = new Set<string>();
 
   // Collect all file: keys from the working tree
@@ -221,7 +283,8 @@ export async function materialize(repo: Repository, rootDir: string): Promise<st
   }
 
   // Remove files on disk that aren't in the store
-  const diskFiles = collectFiles(rootDir, rootDir);
+  const ignoreRules = parseRitIgnore(rootDir);
+  const diskFiles = collectFiles(rootDir, rootDir, ignoreRules);
   for (const path of diskFiles) {
     if (!storeFiles.has(path)) {
       unlinkSync(join(rootDir, path));
