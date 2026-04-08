@@ -217,6 +217,62 @@ export async function readComponents(repo: Repository): Promise<ComponentEntity[
 }
 
 /**
+ * Generate the code for a single component file (by file path).
+ * Returns the TSX source string without writing to disk.
+ */
+export function generateComponentFile(
+  comps: ComponentEntity[],
+  allComponentNames: Set<string>,
+  componentFileMap: Map<string, string>,
+  filePath: string,
+): string {
+  const imports = resolveImports(comps, allComponentNames, componentFileMap, filePath);
+  const componentCode = comps.map(c => materializeComponent(c)).join('\n\n');
+
+  return [
+    imports,
+    '',
+    componentCode,
+    '',
+  ].filter((line, i) => i > 0 || line.length > 0).join('\n');
+}
+
+/**
+ * Build lookup maps from a list of components.
+ */
+export function buildComponentMaps(components: ComponentEntity[]): {
+  allComponentNames: Set<string>;
+  componentFileMap: Map<string, string>;
+  fileGroups: Map<string, ComponentEntity[]>;
+} {
+  const allComponentNames = new Set(components.map(c => c.name));
+  const componentFileMap = new Map<string, string>();
+  for (const comp of components) {
+    componentFileMap.set(comp.name, comp.file);
+  }
+  const fileGroups = new Map<string, ComponentEntity[]>();
+  for (const comp of components) {
+    const group = fileGroups.get(comp.file) || [];
+    group.push(comp);
+    fileGroups.set(comp.file, group);
+  }
+  return { allComponentNames, componentFileMap, fileGroups };
+}
+
+/**
+ * Generate .d.ts declaration content for a component file.
+ */
+export function generateComponentDeclaration(comps: ComponentEntity[]): string {
+  const lines: string[] = [];
+  for (const comp of comps) {
+    const propsType = comp.props || '{}';
+    const exportKw = comp.export === 'default' ? 'export default ' : comp.export === 'named' ? 'export ' : '';
+    lines.push(`${exportKw}declare function ${comp.name}(props: ${propsType}): JSX.Element`);
+  }
+  return lines.join('\n') + '\n';
+}
+
+/**
  * Materialize all component entities to TSX files on disk.
  */
 export async function materializeComponents(
@@ -226,33 +282,11 @@ export async function materializeComponents(
   const components = await readComponents(repo);
   if (components.length === 0) return [];
 
-  // Build component name -> file map for cross-file imports
-  const allComponentNames = new Set(components.map(c => c.name));
-  const componentFileMap = new Map<string, string>();
-  for (const comp of components) {
-    componentFileMap.set(comp.name, comp.file);
-  }
-
-  // Group by file
-  const fileGroups = new Map<string, ComponentEntity[]>();
-  for (const comp of components) {
-    const group = fileGroups.get(comp.file) || [];
-    group.push(comp);
-    fileGroups.set(comp.file, group);
-  }
-
+  const { allComponentNames, componentFileMap, fileGroups } = buildComponentMaps(components);
   const written: string[] = [];
 
   for (const [filePath, comps] of fileGroups) {
-    const imports = resolveImports(comps, allComponentNames, componentFileMap, filePath);
-    const componentCode = comps.map(c => materializeComponent(c)).join('\n\n');
-
-    const output = [
-      imports,
-      '',
-      componentCode,
-      '', // trailing newline
-    ].filter((line, i) => i > 0 || line.length > 0).join('\n');
+    const output = generateComponentFile(comps, allComponentNames, componentFileMap, filePath);
 
     const fullPath = join(rootDir, filePath);
     const dir = dirname(fullPath);
