@@ -234,7 +234,8 @@ async function readSigilModule(repo: Repository, moduleId: string): Promise<stri
 
 /**
  * Read all component entities from the store.
- * If Sigil AST entities exist for body/jsx, uses those instead of raw strings.
+ * Code fields (body, jsx) are read from Sigil AST modules.
+ * Component entities hold metadata only (name, file, export, props, imports).
  */
 export async function readComponents(repo: Repository): Promise<ComponentEntity[]> {
   const components: ComponentEntity[] = [];
@@ -244,22 +245,21 @@ export async function readComponents(repo: Repository): Promise<ComponentEntity[
     const fields = await repo.hgetall(key);
     if (!fields.name) continue;
 
-    // Check for Sigil AST entities (convention: comp-<Name>-body, comp-<Name>-jsx)
     const compName = fields.name || name;
-    let sigilBody = await readSigilModule(repo, `comp-${compName}-body`);
-    let sigilJsx = await readSigilModule(repo, `comp-${compName}-jsx`);
+    let body = await readSigilModule(repo, `comp-${compName}-body`) ?? '';
+    let jsx = await readSigilModule(repo, `comp-${compName}-jsx`) ?? '<></>';
     // Sigil materializes expression statements with trailing semicolons;
     // strip them since the component template wraps jsx in return()
-    if (sigilJsx) sigilJsx = sigilJsx.trim().replace(/;$/, '');
-    if (sigilBody) sigilBody = sigilBody.trim();
+    jsx = jsx.trim().replace(/;$/, '');
+    body = body.trim();
 
     components.push({
       name: compName,
       file: fields.file || `src/components/${name}.tsx`,
       export: (fields.export as ComponentEntity['export']) || 'named',
       props: fields.props || '',
-      body: sigilBody ?? fields.body ?? '',
-      jsx: sigilJsx ?? fields.jsx ?? '<></>',
+      body,
+      jsx,
       imports: fields.imports || '',
     });
   }
