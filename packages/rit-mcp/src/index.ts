@@ -18,6 +18,8 @@ import {
 import { resolve } from "node:path";
 import { openSqliteStore } from '../../../src/store/sqlite.js';
 import { Repository } from '../../../src/repo/index.js';
+import { projectSource, type AstEntityWrite } from '../../sigil/src/projector.js';
+import { materialize } from '../../sigil/src/materializer.js';
 
 // ── Setup ───────────────────────────────────────────────
 
@@ -30,6 +32,37 @@ if (!ritPath) {
 const resolvedPath = resolve(ritPath);
 const { store, refStore, close } = openSqliteStore(resolvedPath);
 let repo = await Repository.init(store, refStore);
+
+// ── Sigil helpers ───────────────────────────────────────
+
+async function writeAstEntities(writes: AstEntityWrite[]): Promise<void> {
+  for (const write of writes) {
+    for (const [field, value] of Object.entries(write.fields)) {
+      await repo.hset(write.key, field, value);
+    }
+  }
+}
+
+async function readAstEntities(prefix: string): Promise<AstEntityWrite[]> {
+  const writes: AstEntityWrite[] = [];
+  for await (const key of repo.keys(`ast:${prefix}.*`)) {
+    const fields = await repo.hgetall(key);
+    if (Object.keys(fields).length > 0) writes.push({ key, fields });
+  }
+  const moduleKey = `module:${prefix}`;
+  const moduleFields = await repo.hgetall(moduleKey);
+  if (Object.keys(moduleFields).length > 0) {
+    writes.unshift({ key: moduleKey, fields: moduleFields });
+  }
+  return writes;
+}
+
+async function clearAstEntities(prefix: string): Promise<void> {
+  for await (const key of repo.keys(`ast:${prefix}.*`)) {
+    await repo.del(key);
+  }
+  await repo.del(`module:${prefix}`);
+}
 
 const server = new Server(
   { name: "rit-mcp", version: "0.0.1" },
@@ -136,6 +169,29 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "rit_project",
+      description: "Project a code string through Sigil into entity AST. Stores AST entities in the store under the given module ID.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          moduleId: { type: "string", description: "Module ID for the AST entities (e.g., comp-Counter-body)" },
+          code: { type: "string", description: "TypeScript/TSX code to project" },
+        },
+        required: ["moduleId", "code"],
+      },
+    },
+    {
+      name: "rit_materialize",
+      description: "Materialize Sigil entity AST back to source code.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          moduleId: { type: "string", description: "Module ID to read and materialize" },
+        },
+        required: ["moduleId"],
+      },
+    },
+    {
       name: "rit_commit",
       description: "Commit the current working tree state.",
       inputSchema: {
@@ -220,6 +276,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           keys.push(k);
         }
         return { content: [{ type: "text", text: keys.length > 0 ? keys.join('\n') : "(empty)" }] };
+      }
+
+      case "rit_project": {
+        const { moduleId, code } = args as { moduleId: string; code: string };
+        // Clear any existing AST entities for this module
+        await clearAstEntities(moduleId);
+        // Project through Sigil
+        const writes = projectSource(code, moduleId);
+        await writeAstEntities(writes);
+        const astCount = writes.filter(w => w.key.startsWith('ast:')).length;
+        return { content: [{ type: "text", text: `Projected ${astCount} AST entities for module ${moduleId}` }] };
+      }
+
+      case "rit_materialize": {
+        const { moduleId } = args as { moduleId: string };
+        const writes = await readAstEntities(moduleId);
+        if (writes.length === 0) {
+          return { content: [{ type: "text", text: "(no AST entities found)" }] };
+        }
+        const code = materialize(writes);
+        return { content: [{ type: "text", text: code }] };
       }
 
       case "rit_commit": {
