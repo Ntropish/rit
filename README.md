@@ -8,7 +8,7 @@ Every mutation produces a new immutable tree with structural sharing. Your entir
 
 Rit is the storage layer for entity-driven development: an approach where applications are defined as structured entities in a versioned store, then projected into source code that standard tools understand.
 
-A React component isn't a `.tsx` file. It's a hash entity with fields for name, props, body, and JSX. A route isn't a file-system convention. It's an entity with path, parent, and component references. The source files developers and tools expect are projections of these entities, materialized on demand.
+A React component isn't a `.tsx` file. It's a set of entities: a metadata entity with name, props, and export style, plus Sigil AST entities for the function body and JSX. A route isn't a file-system convention. It's an entity with path, parent, and component references. The source files developers and tools expect are projections of these entities, materialized on demand.
 
 This means:
 - **Structured diffs and merges.** Two people editing different fields of the same component merge cleanly. No text-level conflict resolution.
@@ -46,7 +46,7 @@ Content-addressed immutable data. Put/get blocks by hash. Refs as mutable pointe
 
 **Packages:** rit core (RedisDataModel, Repository)
 
-Typed key-value operations on top of the store. HSET/HGET/KEYS, strings, sets, sorted sets, lists. Working tree persistence. Commit/branch/checkout.
+Typed key-value operations on top of the store. HSET/HGET/KEYS, strings, sets, sorted sets, lists. Working tree in memory via LayeredStore, flushed to SQLite on commit. Commit/branch/checkout.
 
 *Rule: no knowledge of entity schemas. Doesn't know that "component:Counter" is a component. Just keys and fields.*
 
@@ -96,7 +96,14 @@ If it spans two layers, it's a boundary adapter (like a Vite plugin connecting p
 ## Packages
 
 ```
-src/                    — rit core (layers 1-2)
+src/
+  store/                — block stores: SQLite, memory, LayeredStore (layer 1)
+  prolly/               — prolly tree implementation (layer 1)
+  repo/                 — Repository: working tree, commit, branch, merge, GC (layer 2)
+  commit/               — commit graph, refs (layer 1-2)
+  merge/                — three-way merge (layer 1)
+  hlc/                  — hybrid logical clock (layer 1)
+
 packages/
   sigil/                — TypeScript/JSX entity AST: projector + materializer (layers 3-4)
   fs-rit/               — file version control CLI + plugin interface (access)
