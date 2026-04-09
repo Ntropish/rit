@@ -521,12 +521,18 @@ function projectArrowFunction(node: Node, ctx: ProjectionContext): ProjectionRes
     if (child.getKind() === SyntaxKind.AsyncKeyword) {
       isAsync = true;
     } else if (child.getKind() === SyntaxKind.SyntaxList) {
-      // Parameters
-      for (const param of child.getChildren()) {
-        if (param.getKind() === SyntaxKind.CommaToken) continue;
-        const paramResult = projectParameter(param, ctx);
-        paramIds.push(paramResult.nodeId);
-        writes.push(...paramResult.writes);
+      // SyntaxList may contain AsyncKeyword or parameters
+      const listChildren = child.getChildren();
+      if (listChildren.length === 1 && listChildren[0].getKind() === SyntaxKind.AsyncKeyword) {
+        isAsync = true;
+      } else {
+        for (const param of listChildren) {
+          if (param.getKind() === SyntaxKind.CommaToken) continue;
+          if (param.getKind() === SyntaxKind.AsyncKeyword) { isAsync = true; continue; }
+          const paramResult = projectParameter(param, ctx);
+          paramIds.push(paramResult.nodeId);
+          writes.push(...paramResult.writes);
+        }
       }
     } else if (child.getKind() === SyntaxKind.Block || child.getKind() === SyntaxKind.EqualsGreaterThanToken) {
       // Skip arrow token
