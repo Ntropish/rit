@@ -7,6 +7,7 @@ import { decodeInternalNode } from '../encoding/index.js';
 import { HybridLogicalClock } from '../hlc/index.js';
 import { compareBytes } from '../encoding/index.js';
 import type { DiffEntry } from '../prolly/index.js';
+import { LayeredStore } from '../store/layered.js';
 
 /**
  * Produces DiffEntry objects by walking two sorted entry iterables in parallel.
@@ -98,6 +99,7 @@ export class Repository {
   private _working: DataModel; // working tree (uncommitted state)
   private _headCommitHash: Hash | null; // commit that HEAD points to
   private _hlc: HybridLogicalClock;
+  private _workingLayer: LayeredStore | null; // memory buffer for working tree writes
 
   private constructor(
     store: Store,
@@ -107,6 +109,7 @@ export class Repository {
     working: DataModel,
     headCommitHash: Hash | null,
     hlc: HybridLogicalClock,
+    workingLayer: LayeredStore | null,
   ) {
     this.store = store;
     this.graph = graph;
@@ -115,6 +118,7 @@ export class Repository {
     this._working = working;
     this._headCommitHash = headCommitHash;
     this._hlc = hlc;
+    this._workingLayer = workingLayer;
   }
 
   /** Initialize a new empty repository. */
@@ -129,9 +133,10 @@ export class Repository {
 
     // Check for persisted working state (survives process restarts)
     const workingHash = await refs.getRef(`refs/working/${activeBranch}`);
+    const workingLayer = new LayeredStore(store);
     let working: RedisDataModel;
     if (workingHash) {
-      const tree = new ProllyTree(store, workingHash);
+      const tree = new ProllyTree(workingLayer, workingHash);
       working = new RedisDataModel(tree);
     } else {
       // Fall back to commit tree if no working state
@@ -139,10 +144,10 @@ export class Repository {
       if (commitHash) {
         const commit = await graph.getCommit(commitHash);
         const treeHash = commit?.treeHash ?? null;
-        const tree = new ProllyTree(store, treeHash);
+        const tree = new ProllyTree(workingLayer, treeHash);
         working = new RedisDataModel(tree);
       } else {
-        const emptyTree = new ProllyTree(store, null);
+        const emptyTree = new ProllyTree(workingLayer, null);
         working = new RedisDataModel(emptyTree);
       }
     }
@@ -158,7 +163,7 @@ export class Repository {
     }
     const hlc = new HybridLogicalClock(nodeId);
 
-    return new Repository(store, graph, refs, activeBranch, working, headCommitHash, hlc);
+    return new Repository(store, graph, refs, activeBranch, working, headCommitHash, hlc, workingLayer);
   }
 
   // ── Accessors for sync ──────────────────────────────────
@@ -188,7 +193,6 @@ export class Repository {
   /** Update the working tree. Call this after performing Redis operations. */
   async setData(data: DataModel): Promise<void> {
     this._working = data;
-    await this._persistWorking();
   }
 
   /** Current branch name. */
@@ -231,6 +235,12 @@ export class Repository {
     }
   }
 
+  /** Explicitly persist the working tree. Call before GC or shutdown. */
+  async flush(): Promise<void> {
+    if (this._workingLayer) await this._workingLayer.flush();
+    await this._persistWorking();
+  }
+
   // ── Commit operations ───────────────────────────────────
 
   /** Commit the current working tree state. */
@@ -238,6 +248,8 @@ export class Repository {
     if (data) {
       this._working = data;
     }
+    // Flush buffered blocks to persistent store before committing
+    if (this._workingLayer) await this._workingLayer.flush();
     const treeHash = await this._getWorkingTreeHash();
     const parents = this._headCommitHash ? [this._headCommitHash] : [];
 
@@ -278,7 +290,8 @@ export class Repository {
 
   /** Switch to a different branch. Loads that branch's tree as working state. */
   async checkout(name: string): Promise<void> {
-    // Persist current working state before switching
+    // Flush and persist current working state before switching
+    if (this._workingLayer) await this._workingLayer.flush();
     await this._persistWorking();
 
     const commitHash = await this.refs.getRef(`refs/heads/${name}`);
@@ -290,10 +303,11 @@ export class Repository {
       throw new Error(`Commit ${commitHash} not found`);
     }
 
-    // Load working state: prefer persisted working tree, fall back to commit tree
+    // Load working state with a fresh memory layer
     const workingHash = await this.refs.getRef(`refs/working/${name}`);
     const treeHash = workingHash ?? commit.treeHash;
-    const tree = new ProllyTree(this.store, treeHash);
+    this._workingLayer = new LayeredStore(this.store);
+    const tree = new ProllyTree(this._workingLayer, treeHash);
     this._working = new RedisDataModel(tree);
     this._head = name;
     this._headCommitHash = commitHash;
@@ -376,8 +390,10 @@ export class Repository {
       undefined, { oursHlc: oursCommit!.hlc, theirsHlc: theirsCommit!.hlc },
     );
 
-    // Update working tree with merge result
-    this._working = new RedisDataModel(result.tree);
+    // Update working tree with merge result on a fresh layer
+    this._workingLayer = new LayeredStore(this.store);
+    const mergeTree = new ProllyTree(this._workingLayer, result.tree.rootHash);
+    this._working = new RedisDataModel(mergeTree);
 
     // If clean merge, auto-commit
     if (result.conflicts.length === 0) {
@@ -503,8 +519,8 @@ export class Repository {
   }
 
   // ── Convenience methods ──────────────────────────────────
-  // These handle the data()/setData() threading internally
-  // and persist the working tree after every mutation.
+  // These handle the data()/setData() threading internally.
+  // Working tree is kept in memory; only persisted on commit/checkout.
 
   async get(key: string): Promise<string | null> {
     return this._working.get(key);
@@ -512,12 +528,10 @@ export class Repository {
 
   async set(key: string, value: string): Promise<void> {
     this._working = await this._working.set(key, value);
-    await this._persistWorking();
   }
 
   async del(key: string): Promise<void> {
     this._working = await this._working.del(key);
-    await this._persistWorking();
   }
 
   async hget(key: string, field: string): Promise<string | null> {
@@ -526,12 +540,10 @@ export class Repository {
 
   async hset(key: string, field: string, value: string): Promise<void> {
     this._working = await this._working.hset(key, field, value);
-    await this._persistWorking();
   }
 
   async hdel(key: string, field: string): Promise<void> {
     this._working = await this._working.hdel(key, field);
-    await this._persistWorking();
   }
 
   async hgetall(key: string): Promise<Record<string, string>> {
@@ -540,12 +552,10 @@ export class Repository {
 
   async sadd(key: string, ...members: string[]): Promise<void> {
     this._working = await this._working.sadd(key, ...members);
-    await this._persistWorking();
   }
 
   async srem(key: string, ...members: string[]): Promise<void> {
     this._working = await this._working.srem(key, ...members);
-    await this._persistWorking();
   }
 
   async sismember(key: string, member: string): Promise<boolean> {
@@ -558,7 +568,6 @@ export class Repository {
 
   async zadd(key: string, score: number, member: string): Promise<void> {
     this._working = await this._working.zadd(key, score, member);
-    await this._persistWorking();
   }
 
   async zscore(key: string, member: string): Promise<number | null> {
@@ -571,17 +580,14 @@ export class Repository {
 
   async zrem(key: string, member: string): Promise<void> {
     this._working = await this._working.zrem(key, member);
-    await this._persistWorking();
   }
 
   async rpush(key: string, ...values: string[]): Promise<void> {
     this._working = await this._working.rpush(key, ...values);
-    await this._persistWorking();
   }
 
   async lpush(key: string, ...values: string[]): Promise<void> {
     this._working = await this._working.lpush(key, ...values);
-    await this._persistWorking();
   }
 
   async lrange(key: string, start: number, stop: number): Promise<string[]> {

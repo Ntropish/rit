@@ -749,14 +749,24 @@ function projectTemplateLiteral(node: Node, ctx: ProjectionContext): ProjectionR
   const quasiIds: string[] = [];
   const exprIds: string[] = [];
 
+  // Flatten SyntaxList wrappers: TemplateSpan nodes may be inside a SyntaxList
+  const children: Node[] = [];
   for (const child of node.getChildren()) {
+    if (child.getKind() === SyntaxKind.SyntaxList) {
+      for (const inner of child.getChildren()) children.push(inner);
+    } else {
+      children.push(child);
+    }
+  }
+
+  for (const child of children) {
     if (child.getKind() === SyntaxKind.TemplateHead ||
         child.getKind() === SyntaxKind.TemplateMiddle ||
         child.getKind() === SyntaxKind.TemplateTail) {
       const quasiId = nextId(ctx);
       const text = child.getText();
-      // Remove template delimiters
-      const cooked = text.replace(/^[`}]/, '').replace(/[$`]{1,2}$/, '');
+      // Remove template delimiters (head: `...${, middle: }...${, tail: }...`)
+      const cooked = text.replace(/^[`}]/, '').replace(/\$\{$|`$/, '');
       quasiIds.push(quasiId);
       writes.push({
         key: `ast:${quasiId}`,
@@ -769,7 +779,7 @@ function projectTemplateLiteral(node: Node, ctx: ProjectionContext): ProjectionR
             spanChild.getKind() === SyntaxKind.TemplateTail) {
           const quasiId = nextId(ctx);
           const text = spanChild.getText();
-          const cooked = text.replace(/^[}]/, '').replace(/[$`]{1,2}$/, '');
+          const cooked = text.replace(/^[}]/, '').replace(/\$\{$|`$/, '');
           quasiIds.push(quasiId);
           writes.push({
             key: `ast:${quasiId}`,

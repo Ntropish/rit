@@ -62,7 +62,7 @@ for (const name of pluginNames) {
 // ── Setup ───────────────────────────────────────────────
 
 const resolvedPath = resolve(ritPath);
-const { store, refStore, close } = openSqliteStore(resolvedPath);
+const { store, refStore, db, close } = openSqliteStore(resolvedPath);
 let repo = await Repository.init(store, refStore);
 
 const server = new Server(
@@ -189,6 +189,14 @@ const coreTools: McpToolDef[] = [
       },
     },
   },
+  {
+    name: "rit_gc",
+    description: "Garbage collect unreachable blocks and compact the .rit file.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+    },
+  },
 ];
 
 // ── Tool registration ───────────────────────────────────
@@ -291,6 +299,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           count++;
         }
         return { content: [{ type: "text", text: entries.length > 0 ? entries.join('\n') : "(no commits)" }] };
+      }
+
+      case "rit_gc": {
+        await repo.flush();
+        const result = await repo.gc();
+        db.run('PRAGMA wal_checkpoint(TRUNCATE)');
+        db.exec('VACUUM');
+        const sizeResult = db.query('SELECT page_count * page_size as size FROM pragma_page_count(), pragma_page_size()').get() as any;
+        const sizeKB = Math.round((sizeResult?.size ?? 0) / 1024);
+        return { content: [{ type: "text", text: `Removed ${result.blocksRemoved} block(s), reclaimed ${result.bytesReclaimed} bytes. File compacted to ${sizeKB}KB.` }] };
       }
 
       default:
