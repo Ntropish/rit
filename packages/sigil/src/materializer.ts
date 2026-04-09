@@ -170,11 +170,11 @@ function emitUpdate(node: Record<string, string>, nodes: NodeMap): string {
 function emitMember(node: Record<string, string>, nodes: NodeMap): string {
   const obj = emit(node.object, nodes);
   const prop = emit(node.property, nodes);
-  const opt = node.optional === 'true' ? '?.' : '.';
+  const opt = node.optional === 'true';
   if (node.computed === 'true') {
-    return `${obj}[${prop}]`;
+    return `${obj}${opt ? '?.' : ''}[${prop}]`;
   }
-  return `${obj}${opt}${prop}`;
+  return `${obj}${opt ? '?.' : '.'}${prop}`;
 }
 
 function emitCall(node: Record<string, string>, nodes: NodeMap): string {

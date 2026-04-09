@@ -375,19 +375,20 @@ function projectMemberExpression(node: Node, ctx: ProjectionContext, isComputed:
   const objResult = projectNode(children[0], ctx);
   writes.push(...objResult.writes);
 
-  // For PropertyAccessExpression: children are [object, dot, property]
-  // For ElementAccessExpression: children are [object, openBracket, expression, closeBracket]
+  // PropertyAccessExpression: [object, dot, property] or [object, ?., property]
+  // ElementAccessExpression:   [object, [, expr, ]] or [object, ?., [, expr, ]]
+  // Optional chaining inserts a QuestionDotToken, shifting indices.
+  const isOptional = children.some(c => c.getKind() === SyntaxKind.QuestionDotToken);
   let propResult: ProjectionResult;
   if (isComputed) {
-    propResult = projectNode(children[2], ctx); // skip bracket
+    // Find the expression between brackets
+    const openIdx = children.findIndex(c => c.getKind() === SyntaxKind.OpenBracketToken);
+    propResult = projectNode(children[openIdx + 1], ctx);
   } else {
-    propResult = projectNode(children[2], ctx); // skip dot
+    // Property is the last child
+    propResult = projectNode(children[children.length - 1], ctx);
   }
   writes.push(...propResult.writes);
-
-  // Check optional chaining
-  const text = node.getText();
-  const isOptional = text.includes('?.');
 
   writes.unshift({
     key: `ast:${nodeId}`,
