@@ -103,6 +103,15 @@ export const AST_NODE_TYPES = [
   'ObjectPattern',        // { a, b } = expr
   'RestElement',          // ...rest
 
+  // JSX
+  'JsxElement',           // <div>...</div>
+  'JsxSelfClosingElement',// <br />
+  'JsxFragment',          // <>...</>
+  'JsxAttribute',         // name="value" or name={expr}
+  'JsxSpreadAttribute',   // {...props}
+  'JsxExpression',        // {expr} inside JSX
+  'JsxText',              // text content between tags
+
   // Other
   'Program',              // root node, contains body statements
   'Parameter',            // function parameter with optional type/default
@@ -291,6 +300,16 @@ export const astSchema: EntitySchema = {
     enumMembers: { type: 'string', label: 'Comma-separated enum member node IDs' },
     /** As-expression type target. */
     typeTarget: { type: 'string' },
+
+    // ── JSX ───────────────────────────────────────────────
+    /** JSX tag name (string for intrinsic, or Identifier/MemberExpression ref). */
+    tagName:   { type: 'string' },
+    /** Comma-separated JSX attribute node IDs. */
+    attributes: { type: 'string', label: 'Comma-separated JSX attribute node IDs' },
+    /** Comma-separated JSX child node IDs. */
+    jsxChildren: { type: 'string', label: 'Comma-separated JSX child node IDs' },
+    /** JSX text content. */
+    text:      { type: 'string' },
 
     // ── Pattern (destructuring) ────────────────────────
     /** Comma-separated pattern element node IDs. */

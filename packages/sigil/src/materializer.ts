@@ -109,6 +109,15 @@ function emitNode(node: Record<string, string>, nodes: NodeMap): string {
 
     case 'Parameter':        return emitParameter(node, nodes);
 
+    // JSX
+    case 'JsxElement':           return emitJsxElement(node, nodes);
+    case 'JsxSelfClosingElement': return emitJsxSelfClosing(node, nodes);
+    case 'JsxFragment':          return emitJsxFragment(node, nodes);
+    case 'JsxAttribute':         return emitJsxAttribute(node, nodes);
+    case 'JsxSpreadAttribute':   return emitJsxSpreadAttribute(node, nodes);
+    case 'JsxExpression':        return emitJsxExpression(node, nodes);
+    case 'JsxText':              return node.text ?? '';
+
     default:
       return node.raw ?? node.value ?? '';
   }
@@ -483,4 +492,57 @@ function emitParamList(paramIds: string | undefined, nodes: NodeMap): string {
     }
     return emitNode(node, nodes);
   }).join(', ');
+}
+
+// ── JSX emission ───────────────────────────────────────
+
+function emitJsxAttributes(attrIds: string, nodes: NodeMap): string {
+  if (!attrIds) return '';
+  const attrs = attrIds.split(',').filter(Boolean).map(id => emit(id.trim(), nodes));
+  return attrs.length > 0 ? ' ' + attrs.join(' ') : '';
+}
+
+function emitJsxChildren(childIds: string, nodes: NodeMap): string {
+  if (!childIds) return '';
+  return childIds.split(',').filter(Boolean).map(id => emit(id.trim(), nodes)).join('');
+}
+
+function emitJsxElement(node: Record<string, string>, nodes: NodeMap): string {
+  const tag = node.tagName ?? 'div';
+  const attrs = emitJsxAttributes(node.attributes, nodes);
+  const children = emitJsxChildren(node.jsxChildren, nodes);
+  return `<${tag}${attrs}>${children}</${tag}>`;
+}
+
+function emitJsxSelfClosing(node: Record<string, string>, nodes: NodeMap): string {
+  const tag = node.tagName ?? 'br';
+  const attrs = emitJsxAttributes(node.attributes, nodes);
+  return `<${tag}${attrs} />`;
+}
+
+function emitJsxFragment(node: Record<string, string>, nodes: NodeMap): string {
+  const children = emitJsxChildren(node.jsxChildren, nodes);
+  return `<>${children}</>`;
+}
+
+function emitJsxAttribute(node: Record<string, string>, nodes: NodeMap): string {
+  const name = node.name ?? '';
+  if (!node.init) return name;
+  const valueNode = resolve(node.init, nodes);
+  if (valueNode.type === 'Literal' && valueNode.literalType === 'string') {
+    return `${name}=${emitLiteral(valueNode)}`;
+  }
+  if (valueNode.type === 'JsxExpression') {
+    return `${name}=${emitJsxExpression(valueNode, nodes)}`;
+  }
+  return `${name}={${emit(node.init, nodes)}}`;
+}
+
+function emitJsxSpreadAttribute(node: Record<string, string>, nodes: NodeMap): string {
+  return `{...${node.argument ? emit(node.argument, nodes) : ''}}`;
+}
+
+function emitJsxExpression(node: Record<string, string>, nodes: NodeMap): string {
+  if (!node.argument) return '{}';
+  return `{${emit(node.argument, nodes)}}`;
 }

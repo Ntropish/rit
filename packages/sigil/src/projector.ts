@@ -195,6 +195,18 @@ function projectNode(node: Node, ctx: ProjectionContext): ProjectionResult {
     case SyntaxKind.TaggedTemplateExpression:
       return projectTaggedTemplate(node, ctx);
 
+    // JSX
+    case SyntaxKind.JsxElement:
+      return projectJsxElement(node, ctx);
+    case SyntaxKind.JsxSelfClosingElement:
+      return projectJsxSelfClosing(node, ctx);
+    case SyntaxKind.JsxFragment:
+      return projectJsxFragment(node, ctx);
+    case SyntaxKind.JsxExpression:
+      return projectJsxExpression(node, ctx);
+    case SyntaxKind.JsxText:
+      return projectJsxText(node, ctx);
+
     // Variable declaration list (wrapper)
     case SyntaxKind.VariableDeclarationList:
       // Handled by VariableStatement; shouldn't reach here directly
@@ -1695,6 +1707,257 @@ function projectParameter(node: Node, ctx: ProjectionContext): ProjectionResult 
 }
 
 // ── Fallback ────────────────────────────────────────────
+
+// ── JSX ────────────────────────────────────────────────
+
+function projectJsxElement(node: Node, ctx: ProjectionContext): ProjectionResult {
+  const nodeId = nextId(ctx);
+  const writes: AstEntityWrite[] = [];
+  const children = node.getChildren();
+
+  // First child is JsxOpeningElement, last is JsxClosingElement
+  const opening = children[0];
+  const openChildren = opening.getChildren();
+
+  // Tag name
+  let tagName = '';
+  for (const c of openChildren) {
+    if (c.getKind() === SyntaxKind.Identifier || c.getKind() === SyntaxKind.PropertyAccessExpression) {
+      tagName = c.getText();
+      break;
+    }
+  }
+
+  // Attributes
+  const attrIds: string[] = [];
+  for (const c of openChildren) {
+    if (c.getKind() === SyntaxKind.JsxAttributes) {
+      for (const inner of c.getChildren()) {
+        const attrs = inner.getKind() === SyntaxKind.SyntaxList ? inner.getChildren() : [inner];
+        for (const attr of attrs) {
+          if (attr.getKind() === SyntaxKind.JsxAttribute) {
+            const attrResult = projectJsxAttribute(attr, ctx);
+            attrIds.push(attrResult.nodeId);
+            writes.push(...attrResult.writes);
+          } else if (attr.getKind() === SyntaxKind.JsxSpreadAttribute) {
+            const spreadResult = projectJsxSpreadAttribute(attr, ctx);
+            attrIds.push(spreadResult.nodeId);
+            writes.push(...spreadResult.writes);
+          }
+        }
+      }
+    }
+  }
+
+  // Children (between opening and closing)
+  const childIds: string[] = [];
+  for (let i = 1; i < children.length - 1; i++) {
+    const child = children[i];
+    if (child.getKind() === SyntaxKind.SyntaxList) {
+      for (const grandchild of child.getChildren()) {
+        const childResult = projectNode(grandchild, ctx);
+        childIds.push(childResult.nodeId);
+        writes.push(...childResult.writes);
+      }
+    } else {
+      const childResult = projectNode(child, ctx);
+      childIds.push(childResult.nodeId);
+      writes.push(...childResult.writes);
+    }
+  }
+
+  writes.unshift({
+    key: `ast:${nodeId}`,
+    fields: {
+      nodeId,
+      type: 'JsxElement',
+      tagName,
+      attributes: attrIds.join(','),
+      jsxChildren: childIds.join(','),
+    },
+  });
+
+  return { nodeId, writes };
+}
+
+function projectJsxSelfClosing(node: Node, ctx: ProjectionContext): ProjectionResult {
+  const nodeId = nextId(ctx);
+  const writes: AstEntityWrite[] = [];
+  const children = node.getChildren();
+
+  let tagName = '';
+  const attrIds: string[] = [];
+
+  for (const c of children) {
+    if (c.getKind() === SyntaxKind.Identifier || c.getKind() === SyntaxKind.PropertyAccessExpression) {
+      tagName = c.getText();
+    } else if (c.getKind() === SyntaxKind.JsxAttributes) {
+      // JsxAttributes -> SyntaxList -> JsxAttribute[]
+      for (const inner of c.getChildren()) {
+        const attrs = inner.getKind() === SyntaxKind.SyntaxList ? inner.getChildren() : [inner];
+        for (const attr of attrs) {
+          if (attr.getKind() === SyntaxKind.JsxAttribute) {
+            const attrResult = projectJsxAttribute(attr, ctx);
+            attrIds.push(attrResult.nodeId);
+            writes.push(...attrResult.writes);
+          } else if (attr.getKind() === SyntaxKind.JsxSpreadAttribute) {
+            const spreadResult = projectJsxSpreadAttribute(attr, ctx);
+            attrIds.push(spreadResult.nodeId);
+            writes.push(...spreadResult.writes);
+          }
+        }
+      }
+    }
+  }
+
+  writes.unshift({
+    key: `ast:${nodeId}`,
+    fields: {
+      nodeId,
+      type: 'JsxSelfClosingElement',
+      tagName,
+      attributes: attrIds.join(','),
+    },
+  });
+
+  return { nodeId, writes };
+}
+
+function projectJsxAttribute(node: Node, ctx: ProjectionContext): ProjectionResult {
+  const nodeId = nextId(ctx);
+  const writes: AstEntityWrite[] = [];
+  const children = node.getChildren();
+
+  let attrName = '';
+  let valueId = '';
+
+  for (const c of children) {
+    if (c.getKind() === SyntaxKind.Identifier) {
+      attrName = c.getText();
+    } else if (c.getKind() === SyntaxKind.StringLiteral) {
+      const valResult = projectNode(c, ctx);
+      valueId = valResult.nodeId;
+      writes.push(...valResult.writes);
+    } else if (c.getKind() === SyntaxKind.JsxExpression) {
+      const valResult = projectJsxExpression(c, ctx);
+      valueId = valResult.nodeId;
+      writes.push(...valResult.writes);
+    }
+  }
+
+  const fields: Record<string, string> = {
+    nodeId,
+    type: 'JsxAttribute',
+    name: attrName,
+  };
+  if (valueId) fields.init = valueId;
+
+  writes.unshift({ key: `ast:${nodeId}`, fields });
+  return { nodeId, writes };
+}
+
+function projectJsxSpreadAttribute(node: Node, ctx: ProjectionContext): ProjectionResult {
+  const nodeId = nextId(ctx);
+  const writes: AstEntityWrite[] = [];
+
+  // The expression is inside { ... }
+  const exprNode = node.getChildren().find(c =>
+    c.getKind() !== SyntaxKind.OpenBraceToken &&
+    c.getKind() !== SyntaxKind.CloseBraceToken &&
+    c.getKind() !== SyntaxKind.DotDotDotToken
+  );
+
+  let argId = '';
+  if (exprNode) {
+    const result = projectNode(exprNode, ctx);
+    argId = result.nodeId;
+    writes.push(...result.writes);
+  }
+
+  writes.unshift({
+    key: `ast:${nodeId}`,
+    fields: {
+      nodeId,
+      type: 'JsxSpreadAttribute',
+      argument: argId,
+    },
+  });
+
+  return { nodeId, writes };
+}
+
+function projectJsxExpression(node: Node, ctx: ProjectionContext): ProjectionResult {
+  const nodeId = nextId(ctx);
+  const writes: AstEntityWrite[] = [];
+
+  // Find the expression inside { }
+  let exprId = '';
+  for (const c of node.getChildren()) {
+    if (c.getKind() !== SyntaxKind.OpenBraceToken && c.getKind() !== SyntaxKind.CloseBraceToken) {
+      const result = projectNode(c, ctx);
+      exprId = result.nodeId;
+      writes.push(...result.writes);
+      break;
+    }
+  }
+
+  writes.unshift({
+    key: `ast:${nodeId}`,
+    fields: {
+      nodeId,
+      type: 'JsxExpression',
+      argument: exprId,
+    },
+  });
+
+  return { nodeId, writes };
+}
+
+function projectJsxText(node: Node, ctx: ProjectionContext): ProjectionResult {
+  const nodeId = nextId(ctx);
+  const text = node.getText();
+
+  return {
+    nodeId,
+    writes: [{
+      key: `ast:${nodeId}`,
+      fields: {
+        nodeId,
+        type: 'JsxText',
+        text,
+      },
+    }],
+  };
+}
+
+function projectJsxFragment(node: Node, ctx: ProjectionContext): ProjectionResult {
+  const nodeId = nextId(ctx);
+  const writes: AstEntityWrite[] = [];
+  const childIds: string[] = [];
+
+  for (const child of node.getChildren()) {
+    if (child.getKind() === SyntaxKind.SyntaxList) {
+      for (const grandchild of child.getChildren()) {
+        const result = projectNode(grandchild, ctx);
+        childIds.push(result.nodeId);
+        writes.push(...result.writes);
+      }
+    }
+  }
+
+  writes.unshift({
+    key: `ast:${nodeId}`,
+    fields: {
+      nodeId,
+      type: 'JsxFragment',
+      jsxChildren: childIds.join(','),
+    },
+  });
+
+  return { nodeId, writes };
+}
+
+// ── Fallback ───────────────────────────────────────────
 
 function projectFallback(node: Node, ctx: ProjectionContext): ProjectionResult {
   const nodeId = nextId(ctx);
