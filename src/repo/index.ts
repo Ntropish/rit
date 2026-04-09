@@ -241,10 +241,11 @@ export class Repository {
       const rootHash = await this._getWorkingTreeHash();
       if (rootHash) {
         const reachable = new Set<Hash>();
-        await this._walkTree(rootHash, reachable);
+        // Walk through the LayeredStore so we can see blocks in the buffer
+        await this._walkTree(rootHash, reachable, this._workingLayer);
         await this._workingLayer.flushReachable(reachable);
       } else {
-        this._workingLayer.flushReachable(new Set());
+        await this._workingLayer.flushReachable(new Set());
       }
     }
     await this._persistWorking();
@@ -508,11 +509,12 @@ export class Repository {
   }
 
   /** Recursively walk a prolly tree, adding all node hashes to the reachable set. */
-  private async _walkTree(hash: Hash, reachable: Set<Hash>): Promise<void> {
+  private async _walkTree(hash: Hash, reachable: Set<Hash>, store?: Store): Promise<void> {
     if (reachable.has(hash)) return;
     reachable.add(hash);
 
-    const raw = await this.store.get(hash);
+    const s = store ?? this.store;
+    const raw = await s.get(hash);
     if (!raw) return;
 
     // Byte 0 is the node type: 0 = leaf, 1 = internal
@@ -520,7 +522,7 @@ export class Repository {
       const entries = decodeInternalNode(raw.slice(1));
       for (const entry of entries) {
         const childHex = bytesToHex(entry.childHash);
-        await this._walkTree(childHex, reachable);
+        await this._walkTree(childHex, reachable, s);
       }
     }
     // Leaf nodes are terminal; just marking as reachable is sufficient
