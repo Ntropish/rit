@@ -298,9 +298,10 @@ export function frReact(options: FrReactViteOptions = {}): Plugin {
 
       const dirWatcher = watch(ritDir, (eventType, filename) => {
         if (!filename) return;
-        if (!filename.startsWith(ritBasename)) return;
+        // Only watch the main .rit file, not WAL/SHM (which change during reload)
+        if (filename !== ritBasename) return;
         if (debounceTimer) clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(handleRitChange, 50);
+        debounceTimer = setTimeout(handleRitChange, 100);
       });
       watchers.push(dirWatcher);
 

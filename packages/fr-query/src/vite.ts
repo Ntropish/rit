@@ -164,9 +164,9 @@ export function frQuery(options: FrQueryViteOptions = {}): Plugin {
       const ritBasename = ritFile.split(/[/\\]/).pop()!;
 
       const dirWatcher = watch(ritDir, (_, filename) => {
-        if (!filename || !filename.startsWith(ritBasename)) return;
+        if (!filename || filename !== ritBasename) return;
         if (debounceTimer) clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(handleRitChange, 50);
+        debounceTimer = setTimeout(handleRitChange, 100);
       });
       watchers.push(dirWatcher);
 
