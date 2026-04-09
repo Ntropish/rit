@@ -2,11 +2,11 @@
 /**
  * MCP server for rit entity editing.
  *
- * Exposes rit's Redis-like operations (HSET, HGET, HGETALL, etc.) as MCP tools.
- * Takes a .rit file path as a command-line argument.
+ * Exposes rit's Redis-like operations as MCP tools.
+ * Supports plugins for additional tools (e.g., Sigil, fr-router).
  *
  * Usage:
- *   bun packages/rit-mcp/src/index.ts /path/to/.rit
+ *   bun rit-mcp /path/to/.rit [--plugin sigil] [--plugin fr-router]
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -18,210 +18,205 @@ import {
 import { resolve } from "node:path";
 import { openSqliteStore } from '../../../src/store/sqlite.js';
 import { Repository } from '../../../src/repo/index.js';
-import { projectSource, type AstEntityWrite } from '../../sigil/src/projector.js';
-import { materialize } from '../../sigil/src/materializer.js';
+import type { RitMcpPlugin, McpToolDef } from './plugin.js';
 
-// ── Setup ───────────────────────────────────────────────
+// ── Argument parsing ────────────────────────────────────
 
-const ritPath = process.argv[2];
+const args = process.argv.slice(2);
+let ritPath: string | undefined;
+const pluginNames: string[] = [];
+
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === '--plugin' && i + 1 < args.length) {
+    pluginNames.push(args[++i]);
+  } else if (!ritPath) {
+    ritPath = args[i];
+  }
+}
+
 if (!ritPath) {
-  console.error('Usage: rit-mcp <path-to-.rit>');
+  console.error('Usage: rit-mcp <path-to-.rit> [--plugin name ...]');
   process.exit(1);
 }
+
+// ── Plugin loading ──────────────────────────────────────
+
+const BUILTIN_PLUGINS: Record<string, () => Promise<RitMcpPlugin>> = {
+  sigil: async () => {
+    const mod = await import('./plugins/sigil.js');
+    return mod.sigilPlugin();
+  },
+};
+
+const plugins: RitMcpPlugin[] = [];
+for (const name of pluginNames) {
+  const loader = BUILTIN_PLUGINS[name];
+  if (loader) {
+    plugins.push(await loader());
+  } else {
+    console.error(`Unknown plugin: ${name}`);
+    process.exit(1);
+  }
+}
+
+// ── Setup ───────────────────────────────────────────────
 
 const resolvedPath = resolve(ritPath);
 const { store, refStore, close } = openSqliteStore(resolvedPath);
 let repo = await Repository.init(store, refStore);
-
-// ── Sigil helpers ───────────────────────────────────────
-
-async function writeAstEntities(writes: AstEntityWrite[]): Promise<void> {
-  for (const write of writes) {
-    for (const [field, value] of Object.entries(write.fields)) {
-      await repo.hset(write.key, field, value);
-    }
-  }
-}
-
-async function readAstEntities(prefix: string): Promise<AstEntityWrite[]> {
-  const writes: AstEntityWrite[] = [];
-  for await (const key of repo.keys(`ast:${prefix}.*`)) {
-    const fields = await repo.hgetall(key);
-    if (Object.keys(fields).length > 0) writes.push({ key, fields });
-  }
-  const moduleKey = `module:${prefix}`;
-  const moduleFields = await repo.hgetall(moduleKey);
-  if (Object.keys(moduleFields).length > 0) {
-    writes.unshift({ key: moduleKey, fields: moduleFields });
-  }
-  return writes;
-}
-
-async function clearAstEntities(prefix: string): Promise<void> {
-  for await (const key of repo.keys(`ast:${prefix}.*`)) {
-    await repo.del(key);
-  }
-  await repo.del(`module:${prefix}`);
-}
 
 const server = new Server(
   { name: "rit-mcp", version: "0.0.1" },
   { capabilities: { tools: {} } }
 );
 
-// ── Tools ───────────────────────────────────────────────
+// ── Core tools ──────────────────────────────────────────
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [
-    {
-      name: "rit_hset",
-      description: "Set one or more fields on a hash entity. Fields are key-value pairs.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          key: { type: "string", description: "Entity key (e.g., component:Counter)" },
-          fields: {
-            type: "object",
-            additionalProperties: { type: "string" },
-            description: "Field-value pairs to set",
-          },
-        },
-        required: ["key", "fields"],
-      },
-    },
-    {
-      name: "rit_hget",
-      description: "Get a single field from a hash entity.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          key: { type: "string", description: "Entity key" },
-          field: { type: "string", description: "Field name" },
-        },
-        required: ["key", "field"],
-      },
-    },
-    {
-      name: "rit_hgetall",
-      description: "Get all fields from a hash entity.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          key: { type: "string", description: "Entity key" },
-        },
-        required: ["key"],
-      },
-    },
-    {
-      name: "rit_hdel",
-      description: "Delete a field from a hash entity.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          key: { type: "string", description: "Entity key" },
-          field: { type: "string", description: "Field name to delete" },
-        },
-        required: ["key", "field"],
-      },
-    },
-    {
-      name: "rit_set",
-      description: "Set a string value.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          key: { type: "string", description: "Key" },
-          value: { type: "string", description: "Value" },
-        },
-        required: ["key", "value"],
-      },
-    },
-    {
-      name: "rit_get",
-      description: "Get a string value.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          key: { type: "string", description: "Key" },
-        },
-        required: ["key"],
-      },
-    },
-    {
-      name: "rit_del",
-      description: "Delete a key.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          key: { type: "string", description: "Key to delete" },
-        },
-        required: ["key"],
-      },
-    },
-    {
-      name: "rit_keys",
-      description: "List keys matching a glob pattern.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          pattern: { type: "string", description: "Glob pattern (default: *)", default: "*" },
+const coreTools: McpToolDef[] = [
+  {
+    name: "rit_hset",
+    description: "Set one or more fields on a hash entity. Fields are key-value pairs.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        key: { type: "string", description: "Entity key (e.g., component:Counter)" },
+        fields: {
+          type: "object",
+          additionalProperties: { type: "string" },
+          description: "Field-value pairs to set",
         },
       },
+      required: ["key", "fields"],
     },
-    {
-      name: "rit_project",
-      description: "Project a code string through Sigil into entity AST. Stores AST entities in the store under the given module ID.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          moduleId: { type: "string", description: "Module ID for the AST entities (e.g., comp-Counter-body)" },
-          code: { type: "string", description: "TypeScript/TSX code to project" },
-        },
-        required: ["moduleId", "code"],
+  },
+  {
+    name: "rit_hget",
+    description: "Get a single field from a hash entity.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        key: { type: "string", description: "Entity key" },
+        field: { type: "string", description: "Field name" },
+      },
+      required: ["key", "field"],
+    },
+  },
+  {
+    name: "rit_hgetall",
+    description: "Get all fields from a hash entity.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        key: { type: "string", description: "Entity key" },
+      },
+      required: ["key"],
+    },
+  },
+  {
+    name: "rit_hdel",
+    description: "Delete a field from a hash entity.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        key: { type: "string", description: "Entity key" },
+        field: { type: "string", description: "Field name to delete" },
+      },
+      required: ["key", "field"],
+    },
+  },
+  {
+    name: "rit_set",
+    description: "Set a string value.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        key: { type: "string", description: "Key" },
+        value: { type: "string", description: "Value" },
+      },
+      required: ["key", "value"],
+    },
+  },
+  {
+    name: "rit_get",
+    description: "Get a string value.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        key: { type: "string", description: "Key" },
+      },
+      required: ["key"],
+    },
+  },
+  {
+    name: "rit_del",
+    description: "Delete a key.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        key: { type: "string", description: "Key to delete" },
+      },
+      required: ["key"],
+    },
+  },
+  {
+    name: "rit_keys",
+    description: "List keys matching a glob pattern.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        pattern: { type: "string", description: "Glob pattern (default: *)", default: "*" },
       },
     },
-    {
-      name: "rit_materialize",
-      description: "Materialize Sigil entity AST back to source code.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          moduleId: { type: "string", description: "Module ID to read and materialize" },
-        },
-        required: ["moduleId"],
+  },
+  {
+    name: "rit_commit",
+    description: "Commit the current working tree state.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        message: { type: "string", description: "Commit message" },
+      },
+      required: ["message"],
+    },
+  },
+  {
+    name: "rit_log",
+    description: "Show commit history.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: { type: "number", description: "Max entries (default: 10)", default: 10 },
       },
     },
-    {
-      name: "rit_commit",
-      description: "Commit the current working tree state.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          message: { type: "string", description: "Commit message" },
-        },
-        required: ["message"],
-      },
-    },
-    {
-      name: "rit_log",
-      description: "Show commit history.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          limit: { type: "number", description: "Max entries (default: 10)", default: 10 },
-        },
-      },
-    },
-  ],
-}));
+  },
+];
+
+// ── Tool registration ───────────────────────────────────
+
+server.setRequestHandler(ListToolsRequestSchema, async () => {
+  const allTools = [...coreTools];
+  for (const plugin of plugins) {
+    allTools.push(...plugin.tools());
+  }
+  return { tools: allTools };
+});
+
+// ── Tool dispatch ───────────────────────────────────────
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
+  const { name, arguments: toolArgs } = request.params;
 
   try {
+    // Try plugins first
+    for (const plugin of plugins) {
+      const result = await plugin.handle(name, toolArgs as Record<string, any>, repo);
+      if (result) return result;
+    }
+
+    // Core handlers
     switch (name) {
       case "rit_hset": {
-        const { key, fields } = args as { key: string; fields: Record<string, string> };
+        const { key, fields } = toolArgs as { key: string; fields: Record<string, string> };
         for (const [field, value] of Object.entries(fields)) {
           await repo.hset(key, field, value);
         }
@@ -229,13 +224,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "rit_hget": {
-        const { key, field } = args as { key: string; field: string };
+        const { key, field } = toolArgs as { key: string; field: string };
         const value = await repo.hget(key, field);
         return { content: [{ type: "text", text: value ?? "(nil)" }] };
       }
 
       case "rit_hgetall": {
-        const { key } = args as { key: string };
+        const { key } = toolArgs as { key: string };
         const all = await repo.hgetall(key);
         const entries = Object.entries(all);
         if (entries.length === 0) {
@@ -246,31 +241,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "rit_hdel": {
-        const { key, field } = args as { key: string; field: string };
+        const { key, field } = toolArgs as { key: string; field: string };
         await repo.hdel(key, field);
         return { content: [{ type: "text", text: `Deleted ${field} from ${key}` }] };
       }
 
       case "rit_set": {
-        const { key, value } = args as { key: string; value: string };
+        const { key, value } = toolArgs as { key: string; value: string };
         await repo.set(key, value);
         return { content: [{ type: "text", text: "OK" }] };
       }
 
       case "rit_get": {
-        const { key } = args as { key: string };
+        const { key } = toolArgs as { key: string };
         const value = await repo.get(key);
         return { content: [{ type: "text", text: value ?? "(nil)" }] };
       }
 
       case "rit_del": {
-        const { key } = args as { key: string };
+        const { key } = toolArgs as { key: string };
         await repo.del(key);
         return { content: [{ type: "text", text: "OK" }] };
       }
 
       case "rit_keys": {
-        const { pattern } = args as { pattern?: string };
+        const { pattern } = toolArgs as { pattern?: string };
         const keys: string[] = [];
         for await (const k of repo.keys(pattern ?? '*')) {
           keys.push(k);
@@ -278,35 +273,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return { content: [{ type: "text", text: keys.length > 0 ? keys.join('\n') : "(empty)" }] };
       }
 
-      case "rit_project": {
-        const { moduleId, code } = args as { moduleId: string; code: string };
-        // Clear any existing AST entities for this module
-        await clearAstEntities(moduleId);
-        // Project through Sigil
-        const writes = projectSource(code, moduleId);
-        await writeAstEntities(writes);
-        const astCount = writes.filter(w => w.key.startsWith('ast:')).length;
-        return { content: [{ type: "text", text: `Projected ${astCount} AST entities for module ${moduleId}` }] };
-      }
-
-      case "rit_materialize": {
-        const { moduleId } = args as { moduleId: string };
-        const writes = await readAstEntities(moduleId);
-        if (writes.length === 0) {
-          return { content: [{ type: "text", text: "(no AST entities found)" }] };
-        }
-        const code = materialize(writes);
-        return { content: [{ type: "text", text: code }] };
-      }
-
       case "rit_commit": {
-        const { message } = args as { message: string };
+        const { message } = toolArgs as { message: string };
         const hash = await repo.commit(message);
         return { content: [{ type: "text", text: `Committed: ${hash.slice(0, 12)}` }] };
       }
 
       case "rit_log": {
-        const { limit } = args as { limit?: number };
+        const { limit } = toolArgs as { limit?: number };
         const max = limit ?? 10;
         const entries: string[] = [];
         let count = 0;
