@@ -237,7 +237,16 @@ export class Repository {
 
   /** Explicitly persist the working tree. Call before GC or shutdown. */
   async flush(): Promise<void> {
-    if (this._workingLayer) await this._workingLayer.flush();
+    if (this._workingLayer) {
+      const rootHash = await this._getWorkingTreeHash();
+      if (rootHash) {
+        const reachable = new Set<Hash>();
+        await this._walkTree(rootHash, reachable);
+        await this._workingLayer.flushReachable(reachable);
+      } else {
+        this._workingLayer.flushReachable(new Set());
+      }
+    }
     await this._persistWorking();
   }
 
@@ -248,8 +257,8 @@ export class Repository {
     if (data) {
       this._working = data;
     }
-    // Flush buffered blocks to persistent store before committing
-    if (this._workingLayer) await this._workingLayer.flush();
+    // Flush only reachable blocks to persistent store before committing
+    await this.flush();
     const treeHash = await this._getWorkingTreeHash();
     const parents = this._headCommitHash ? [this._headCommitHash] : [];
 
@@ -290,9 +299,8 @@ export class Repository {
 
   /** Switch to a different branch. Loads that branch's tree as working state. */
   async checkout(name: string): Promise<void> {
-    // Flush and persist current working state before switching
-    if (this._workingLayer) await this._workingLayer.flush();
-    await this._persistWorking();
+    // Flush reachable blocks and persist current working state before switching
+    await this.flush();
 
     const commitHash = await this.refs.getRef(`refs/heads/${name}`);
     if (!commitHash) {

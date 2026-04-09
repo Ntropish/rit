@@ -57,11 +57,21 @@ export class LayeredStore implements Store {
     }
   }
 
-  /** Flush buffered blocks to the backing store and clear the buffer. */
-  async flush(): Promise<void> {
+  /**
+   * Flush only the given reachable hashes from the buffer to the backing store.
+   * Discards all other buffered blocks (intermediate tree nodes from mutations).
+   */
+  async flushReachable(reachable: Set<Hash>): Promise<void> {
     if (this.buffer.size === 0) return;
-    const entries = Array.from(this.buffer.entries()).map(([hash, data]) => ({ hash, data }));
-    await this.backing.putBatch(entries);
+    const entries: Array<{ hash: Hash; data: Uint8Array }> = [];
+    for (const [hash, data] of this.buffer) {
+      if (reachable.has(hash)) {
+        entries.push({ hash, data });
+      }
+    }
+    if (entries.length > 0) {
+      await this.backing.putBatch(entries);
+    }
     this.buffer.clear();
   }
 

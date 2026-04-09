@@ -10,26 +10,26 @@ describe('Repository.gc()', () => {
     repo = await Repository.init(store);
   });
 
-  it('removes orphaned working tree blocks', async () => {
-    // Multiple sets before commit create intermediate tree nodes
-    // that get overwritten in the working ref
+  it('does not leak intermediate blocks to backing store', async () => {
+    // Multiple sets before commit create intermediate tree nodes in the
+    // LayeredStore buffer. Only reachable blocks should reach the backing store.
     await repo.set('a', '1');
-    const sizeAfterFirstSet = store.size;
-
-    // Each set creates new tree blocks; previous working tree root becomes orphaned
     await repo.set('a', '2');
     await repo.set('a', '3');
     await repo.set('b', '4');
     await repo.set('b', '5');
     await repo.commit('final');
 
-    expect(store.size).toBeGreaterThan(sizeAfterFirstSet);
-    const sizeBeforeGc = store.size;
+    const sizeAfterCommit = store.size;
 
+    // GC should find nothing to remove: flush only wrote reachable blocks
     const result = await repo.gc();
-    expect(result.blocksRemoved).toBeGreaterThan(0);
-    expect(result.bytesReclaimed).toBeGreaterThan(0);
-    expect(store.size).toBeLessThan(sizeBeforeGc);
+    expect(result.blocksRemoved).toBe(0);
+    expect(store.size).toBe(sizeAfterCommit);
+
+    // Data is correct
+    expect(await repo.get('a')).toBe('3');
+    expect(await repo.get('b')).toBe('5');
   });
 
   it('preserves all data after gc', async () => {
