@@ -70,7 +70,10 @@ function updateDtsSection(fullPath: string, sectionName: string, content: string
     result = existing ? existing.trimEnd() + '\n\n' + section + '\n' : section + '\n';
   }
 
-  writeFileSync(fullPath, result);
+  // Only write if content actually changed to avoid triggering file watchers
+  if (result !== existing) {
+    writeFileSync(fullPath, result);
+  }
 }
 
 export { updateDtsSection };
@@ -198,6 +201,12 @@ export function frReact(options: FrReactViteOptions = {}): Plugin {
 
     config() {
       return {
+        server: {
+          watch: {
+            // Ignore .rit SQLite files; the plugin handles .rit watching separately
+            ignored: ['**/.rit', '**/.rit-wal', '**/.rit-shm', '**/.rit-journal'],
+          },
+        },
         optimizeDeps: {
           esbuildOptions: {
             plugins: [{
