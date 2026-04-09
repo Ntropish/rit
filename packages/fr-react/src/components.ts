@@ -9,6 +9,8 @@
 import { writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname, relative } from 'path';
 import type { Repository } from '../../../src/repo/index.js';
+import type { AstEntityWrite } from '../../sigil/src/projector.js';
+import { materialize as sigilMaterialize } from '../../sigil/src/materializer.js';
 
 export type SymbolRegistry = Record<string, { source: string; isDefault: boolean }>;
 
@@ -207,7 +209,32 @@ ${jsxLines}
 }
 
 /**
+ * Read Sigil AST entities for a module ID from the store.
+ * Returns null if no AST entities exist for this module.
+ */
+async function readSigilModule(repo: Repository, moduleId: string): Promise<string | null> {
+  const writes: AstEntityWrite[] = [];
+
+  // Check if module entity exists
+  const moduleFields = await repo.hgetall(`module:${moduleId}`);
+  if (Object.keys(moduleFields).length === 0) return null;
+  writes.push({ key: `module:${moduleId}`, fields: moduleFields });
+
+  // Read all AST entities for this module
+  for await (const key of repo.keys(`ast:${moduleId}.*`)) {
+    const fields = await repo.hgetall(key);
+    if (Object.keys(fields).length > 0) {
+      writes.push({ key, fields });
+    }
+  }
+
+  if (writes.length <= 1) return null;
+  return sigilMaterialize(writes);
+}
+
+/**
  * Read all component entities from the store.
+ * If Sigil AST entities exist for body/jsx, uses those instead of raw strings.
  */
 export async function readComponents(repo: Repository): Promise<ComponentEntity[]> {
   const components: ComponentEntity[] = [];
@@ -217,13 +244,22 @@ export async function readComponents(repo: Repository): Promise<ComponentEntity[
     const fields = await repo.hgetall(key);
     if (!fields.name) continue;
 
+    // Check for Sigil AST entities (convention: comp-<Name>-body, comp-<Name>-jsx)
+    const compName = fields.name || name;
+    let sigilBody = await readSigilModule(repo, `comp-${compName}-body`);
+    let sigilJsx = await readSigilModule(repo, `comp-${compName}-jsx`);
+    // Sigil materializes expression statements with trailing semicolons;
+    // strip them since the component template wraps jsx in return()
+    if (sigilJsx) sigilJsx = sigilJsx.trim().replace(/;$/, '');
+    if (sigilBody) sigilBody = sigilBody.trim();
+
     components.push({
-      name: fields.name || name,
+      name: compName,
       file: fields.file || `src/components/${name}.tsx`,
       export: (fields.export as ComponentEntity['export']) || 'named',
       props: fields.props || '',
-      body: fields.body || '',
-      jsx: fields.jsx || '<></>',
+      body: sigilBody ?? fields.body ?? '',
+      jsx: sigilJsx ?? fields.jsx ?? '<></>',
       imports: fields.imports || '',
     });
   }
