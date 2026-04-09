@@ -31,6 +31,29 @@ interface ProjectionContext {
   counter: number;
 }
 
+// ── Utilities ──────────────────────────────────────────
+
+/**
+ * Get children of a node, flattening any SyntaxList wrappers.
+ *
+ * TypeScript's internal AST wraps modifier lists, parameter lists,
+ * template spans, and other grouped children in SyntaxList nodes.
+ * These are transparent containers that carry no semantic meaning.
+ * Flattening them gives a uniform child sequence regardless of
+ * whether TypeScript chose to wrap in a SyntaxList.
+ */
+function flatChildren(node: Node): Node[] {
+  const result: Node[] = [];
+  for (const child of node.getChildren()) {
+    if (child.getKind() === SyntaxKind.SyntaxList) {
+      result.push(...child.getChildren());
+    } else {
+      result.push(child);
+    }
+  }
+  return result;
+}
+
 // ── Public API ──────────────────────────────────────────
 
 /**
@@ -225,15 +248,11 @@ function projectProgram(node: Node, ctx: ProjectionContext): ProjectionResult {
   const writes: AstEntityWrite[] = [];
   const stmtIds: string[] = [];
 
-  for (const child of node.getChildren()) {
-    if (child.getKind() === SyntaxKind.SyntaxList) {
-      for (const stmt of child.getChildren()) {
-        if (stmt.getKind() === SyntaxKind.EndOfFileToken) continue;
-        const result = projectNode(stmt, ctx);
-        stmtIds.push(result.nodeId);
-        writes.push(...result.writes);
-      }
-    }
+  for (const child of flatChildren(node)) {
+    if (child.getKind() === SyntaxKind.EndOfFileToken) continue;
+    const result = projectNode(child, ctx);
+    stmtIds.push(result.nodeId);
+    writes.push(...result.writes);
   }
 
   writes.unshift({
@@ -415,17 +434,15 @@ function projectCallExpression(node: Node, ctx: ProjectionContext): ProjectionRe
   const calleeResult = projectNode(children[0], ctx);
   writes.push(...calleeResult.writes);
 
-  // Arguments are inside parentheses: SyntaxList between ( and )
   const argIds: string[] = [];
-  for (const child of children) {
-    if (child.getKind() === SyntaxKind.SyntaxList) {
-      for (const arg of child.getChildren()) {
-        if (arg.getKind() === SyntaxKind.CommaToken) continue;
-        const argResult = projectNode(arg, ctx);
-        argIds.push(argResult.nodeId);
-        writes.push(...argResult.writes);
-      }
-    }
+  for (const child of flatChildren(node)) {
+    if (child.getKind() === SyntaxKind.CommaToken ||
+        child.getKind() === SyntaxKind.OpenParenToken ||
+        child.getKind() === SyntaxKind.CloseParenToken) continue;
+    if (child === children[0]) continue; // callee already projected
+    const argResult = projectNode(child, ctx);
+    argIds.push(argResult.nodeId);
+    writes.push(...argResult.writes);
   }
 
   writes.unshift({
@@ -453,15 +470,15 @@ function projectNewExpression(node: Node, ctx: ProjectionContext): ProjectionRes
   writes.push(...calleeResult.writes);
 
   const argIds: string[] = [];
-  for (const child of children) {
-    if (child.getKind() === SyntaxKind.SyntaxList) {
-      for (const arg of child.getChildren()) {
-        if (arg.getKind() === SyntaxKind.CommaToken) continue;
-        const argResult = projectNode(arg, ctx);
-        argIds.push(argResult.nodeId);
-        writes.push(...argResult.writes);
-      }
-    }
+  for (const child of flatChildren(node)) {
+    if (child.getKind() === SyntaxKind.CommaToken ||
+        child.getKind() === SyntaxKind.OpenParenToken ||
+        child.getKind() === SyntaxKind.CloseParenToken ||
+        child.getKind() === SyntaxKind.NewKeyword) continue;
+    if (child === children[1]) continue; // callee already projected
+    const argResult = projectNode(child, ctx);
+    argIds.push(argResult.nodeId);
+    writes.push(...argResult.writes);
   }
 
   writes.unshift({
@@ -518,35 +535,26 @@ function projectArrowFunction(node: Node, ctx: ProjectionContext): ProjectionRes
   let isAsync = false;
   let returnType: string | undefined;
 
-  for (const child of children) {
-    if (child.getKind() === SyntaxKind.AsyncKeyword) {
+  const arrowToken = node.getChildren().find(c => c.getKind() === SyntaxKind.EqualsGreaterThanToken);
+  const arrowEnd = arrowToken?.getEnd() ?? Infinity;
+
+  for (const child of flatChildren(node)) {
+    const kind = child.getKind();
+    if (kind === SyntaxKind.AsyncKeyword) {
       isAsync = true;
-    } else if (child.getKind() === SyntaxKind.SyntaxList) {
-      // SyntaxList may contain AsyncKeyword or parameters
-      const listChildren = child.getChildren();
-      if (listChildren.length === 1 && listChildren[0].getKind() === SyntaxKind.AsyncKeyword) {
-        isAsync = true;
-      } else {
-        for (const param of listChildren) {
-          if (param.getKind() === SyntaxKind.CommaToken) continue;
-          if (param.getKind() === SyntaxKind.AsyncKeyword) { isAsync = true; continue; }
-          const paramResult = projectParameter(param, ctx);
-          paramIds.push(paramResult.nodeId);
-          writes.push(...paramResult.writes);
-        }
-      }
-    } else if (child.getKind() === SyntaxKind.Block || child.getKind() === SyntaxKind.EqualsGreaterThanToken) {
-      // Skip arrow token
-    } else if (child.getKind() === SyntaxKind.ColonToken) {
-      // Skip colon before return type
-    } else if (child.getKind() !== SyntaxKind.OpenParenToken &&
-               child.getKind() !== SyntaxKind.CloseParenToken &&
-               child.getKind() !== SyntaxKind.EqualsGreaterThanToken) {
-      // Could be the body (expression or block) or return type
-      if (!bodyResult && child.getStart() > node.getChildren().find(c => c.getKind() === SyntaxKind.EqualsGreaterThanToken)?.getEnd()!) {
-        bodyResult = projectNode(child, ctx);
-        writes.push(...bodyResult.writes);
-      }
+    } else if (kind === SyntaxKind.CommaToken ||
+               kind === SyntaxKind.OpenParenToken ||
+               kind === SyntaxKind.CloseParenToken ||
+               kind === SyntaxKind.EqualsGreaterThanToken ||
+               kind === SyntaxKind.ColonToken) {
+      continue;
+    } else if (kind === SyntaxKind.Parameter) {
+      const paramResult = projectParameter(child, ctx);
+      paramIds.push(paramResult.nodeId);
+      writes.push(...paramResult.writes);
+    } else if (child.getStart() >= arrowEnd && !bodyResult) {
+      bodyResult = projectNode(child, ctx);
+      writes.push(...bodyResult.writes);
     }
   }
 
@@ -624,15 +632,13 @@ function projectArrayExpression(node: Node, ctx: ProjectionContext): ProjectionR
   const writes: AstEntityWrite[] = [];
   const elementIds: string[] = [];
 
-  for (const child of node.getChildren()) {
-    if (child.getKind() === SyntaxKind.SyntaxList) {
-      for (const elem of child.getChildren()) {
-        if (elem.getKind() === SyntaxKind.CommaToken) continue;
-        const elemResult = projectNode(elem, ctx);
-        elementIds.push(elemResult.nodeId);
-        writes.push(...elemResult.writes);
-      }
-    }
+  for (const child of flatChildren(node)) {
+    if (child.getKind() === SyntaxKind.CommaToken ||
+        child.getKind() === SyntaxKind.OpenBracketToken ||
+        child.getKind() === SyntaxKind.CloseBracketToken) continue;
+    const elemResult = projectNode(child, ctx);
+    elementIds.push(elemResult.nodeId);
+    writes.push(...elemResult.writes);
   }
 
   writes.unshift({
@@ -654,15 +660,13 @@ function projectObjectExpression(node: Node, ctx: ProjectionContext): Projection
   const writes: AstEntityWrite[] = [];
   const propIds: string[] = [];
 
-  for (const child of node.getChildren()) {
-    if (child.getKind() === SyntaxKind.SyntaxList) {
-      for (const prop of child.getChildren()) {
-        if (prop.getKind() === SyntaxKind.CommaToken) continue;
-        const propResult = projectNode(prop, ctx);
-        propIds.push(propResult.nodeId);
-        writes.push(...propResult.writes);
-      }
-    }
+  for (const child of flatChildren(node)) {
+    if (child.getKind() === SyntaxKind.CommaToken ||
+        child.getKind() === SyntaxKind.OpenBraceToken ||
+        child.getKind() === SyntaxKind.CloseBraceToken) continue;
+    const propResult = projectNode(child, ctx);
+    propIds.push(propResult.nodeId);
+    writes.push(...propResult.writes);
   }
 
   writes.unshift({
@@ -756,17 +760,7 @@ function projectTemplateLiteral(node: Node, ctx: ProjectionContext): ProjectionR
   const quasiIds: string[] = [];
   const exprIds: string[] = [];
 
-  // Flatten SyntaxList wrappers: TemplateSpan nodes may be inside a SyntaxList
-  const children: Node[] = [];
-  for (const child of node.getChildren()) {
-    if (child.getKind() === SyntaxKind.SyntaxList) {
-      for (const inner of child.getChildren()) children.push(inner);
-    } else {
-      children.push(child);
-    }
-  }
-
-  for (const child of children) {
+  for (const child of flatChildren(node)) {
     if (child.getKind() === SyntaxKind.TemplateHead ||
         child.getKind() === SyntaxKind.TemplateMiddle ||
         child.getKind() === SyntaxKind.TemplateTail) {
@@ -970,14 +964,12 @@ function projectBlock(node: Node, ctx: ProjectionContext): ProjectionResult {
   const writes: AstEntityWrite[] = [];
   const stmtIds: string[] = [];
 
-  for (const child of node.getChildren()) {
-    if (child.getKind() === SyntaxKind.SyntaxList) {
-      for (const stmt of child.getChildren()) {
-        const result = projectNode(stmt, ctx);
-        stmtIds.push(result.nodeId);
-        writes.push(...result.writes);
-      }
-    }
+  for (const child of flatChildren(node)) {
+    if (child.getKind() === SyntaxKind.OpenBraceToken ||
+        child.getKind() === SyntaxKind.CloseBraceToken) continue;
+    const result = projectNode(child, ctx);
+    stmtIds.push(result.nodeId);
+    writes.push(...result.writes);
   }
 
   writes.unshift({
