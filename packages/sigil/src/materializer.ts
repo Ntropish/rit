@@ -72,6 +72,7 @@ function emitNode(node: Record<string, string>, nodes: NodeMap): string {
     case 'TaggedTemplate':    return emitTaggedTemplate(node, nodes);
     case 'AwaitExpression':   return emitPrefix(node, nodes, 'await ');
     case 'AsExpression':      return emitAs(node, nodes);
+    case 'ParenthesizedExpression': return `(${emit(node.expression, nodes)})`;
     case 'NonNullExpression':  return emitNonNull(node, nodes);
     case 'ThisExpression':    return 'this';
     case 'SuperExpression':   return 'super';

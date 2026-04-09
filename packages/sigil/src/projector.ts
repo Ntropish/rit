@@ -840,9 +840,16 @@ function projectPrefixExpression(node: Node, ctx: ProjectionContext, type: AstNo
 // ── Parenthesized expression ────────────────────────────
 
 function projectParenthesized(node: Node, ctx: ProjectionContext): ProjectionResult {
-  // Unwrap parentheses; project the inner expression directly
+  const nodeId = nextId(ctx);
+  const writes: AstEntityWrite[] = [];
   const children = node.getChildren();
-  return projectNode(children[1], ctx); // skip ( and )
+  const innerResult = projectNode(children[1], ctx); // skip ( and )
+  writes.push(...innerResult.writes);
+  writes.unshift({
+    key: `ast:${nodeId}`,
+    fields: { nodeId, type: 'ParenthesizedExpression', expression: innerResult.nodeId },
+  });
+  return { nodeId, writes };
 }
 
 // ── As expression (TS) ──────────────────────────────────
@@ -1932,7 +1939,8 @@ function projectJsxExpression(node: Node, ctx: ProjectionContext): ProjectionRes
 
 function projectJsxText(node: Node, ctx: ProjectionContext): ProjectionResult {
   const nodeId = nextId(ctx);
-  const text = node.getText();
+  // Use getFullText to preserve leading whitespace (trivia) between JSX expressions
+  const text = node.getFullText();
 
   return {
     nodeId,
