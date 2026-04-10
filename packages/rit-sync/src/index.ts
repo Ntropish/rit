@@ -1,5 +1,6 @@
 export type { LanguagePlugin, EntityWrite, FileEntities } from './types.js';
 export { ModuleSchema, FunctionSchema, TypeDefSchema } from './schemas.js';
+/** @deprecated Use @rit/pipeline instead */
 export { PipelineSchema, StepSchema } from './ci-schemas.js';
 export { typescriptPlugin } from './plugins/typescript.js';
 export { jsonPlugin, JsonFileSchema } from './plugins/json.js';

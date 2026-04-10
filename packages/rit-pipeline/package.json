@@ -1,0 +1,26 @@
+{
+  "name": "@rit/pipeline",
+  "version": "0.0.2",
+  "description": "Pipeline plugin for rit: CI/CD pipeline and step entity materialization",
+  "type": "module",
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./plugin": "./src/dev-server-plugin.ts"
+  },
+  "bin": {
+    "rit-pipeline-materialize": "src/materialize-cli.ts"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@rit/core": "^0.0.2",
+    "@rit/schema": "^0.0.1",
+    "@rit/sigil": "^0.0.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
+  }
+}
