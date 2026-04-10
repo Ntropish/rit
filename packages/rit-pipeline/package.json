@@ -1,6 +1,6 @@
 {
   "name": "@rit/pipeline",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Pipeline plugin for rit: CI/CD pipeline and step entity materialization",
   "type": "module",
   "main": "src/index.ts",
@@ -15,7 +15,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@rit/core": "^0.0.2",
+    "@rit/core": "^0.0.3",
     "@rit/schema": "^0.0.1",
     "@rit/sigil": "^0.0.1"
   },

@@ -1,21 +1,23 @@
 {
-  "name": "@rit/sigil",
-  "version": "0.0.7",
-  "description": "Entity-based program representation and build tool for rit",
+  "name": "@rit/hono",
+  "version": "0.0.6",
+  "description": "Hono plugin for rit: route, middleware, and app entity materialization",
   "type": "module",
   "main": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
     "./plugin": "./src/dev-server-plugin.ts"
   },
+  "bin": {
+    "rit-hono-materialize": "src/materialize-cli.ts"
+  },
   "scripts": {
-    "build": "tsc",
     "test": "vitest run"
   },
   "dependencies": {
     "@rit/core": "^0.0.3",
     "@rit/schema": "^0.0.1",
-    "ts-morph": "^27.0.2"
+    "@rit/sigil": "^0.0.1"
   },
   "devDependencies": {
     "typescript": "^5.4.0",

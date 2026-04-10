@@ -1,6 +1,6 @@
 {
-  "name": "rit",
-  "version": "0.0.1",
+  "name": "@rit/core",
+  "version": "0.0.3",
   "description": "Redis + Git: versioned key-value store built on prolly trees",
   "type": "module",
   "main": "src/repo/index.ts",
@@ -8,6 +8,8 @@
   "exports": {
     ".": "./src/repo/index.ts",
     "./src/store/sqlite.js": "./src/store/sqlite.ts",
+    "./src/store/sqlite": "./src/store/sqlite.ts",
+    "./sqlite": "./src/store/sqlite.ts",
     "./packages/rit-schema/src/index.js": "./packages/rit-schema/src/index.ts",
     "./packages/rit-sync/src/schemas.js": "./packages/rit-sync/src/schemas.ts",
     "./packages/rit-sync/src/html-schemas.js": "./packages/rit-sync/src/html-schemas.ts",

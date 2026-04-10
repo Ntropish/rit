@@ -1,6 +1,6 @@
 {
   "name": "@rit/fs",
-  "version": "0.0.1",
+  "version": "0.0.4",
   "description": "File-system version control backed by rit",
   "type": "module",
   "bin": {
@@ -9,6 +9,9 @@
   "main": "src/index.ts",
   "scripts": {
     "test": "vitest run"
+  },
+  "dependencies": {
+    "@rit/core": "^0.0.3"
   },
   "devDependencies": {
     "typescript": "^5.4.0",

@@ -1,0 +1,14 @@
+{
+  "name": "@rit/rit-zod",
+  "version": "0.0.1",
+  "description": "Zod schema plugin for rit: entity-defined validators materialized to zod code",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
+  }
+}
