@@ -261,6 +261,13 @@ export class Repository {
     // Flush only reachable blocks to persistent store before committing
     await this.flush();
     const treeHash = await this._getWorkingTreeHash();
+
+    // Re-read the branch ref from the store to pick up commits from other processes
+    // sharing the same .rit file (e.g. dev server and fr CLI running concurrently).
+    const currentRef = await this.refs.getRef(`refs/heads/${this._head}`);
+    if (currentRef && currentRef !== this._headCommitHash) {
+      this._headCommitHash = currentRef;
+    }
     const parents = this._headCommitHash ? [this._headCommitHash] : [];
 
     const commit: Commit = {
